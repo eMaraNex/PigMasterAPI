@@ -1,0 +1,23 @@
+{
+    "version": 2,
+    "builds": [
+        {
+            "src": "src/index.mjs",
+            "use": "@vercel/node",
+            "config": {
+                "includeFiles": [
+                    "src/**"
+                ]
+            }
+        }
+    ],
+    "routes": [
+        {
+            "src": "/(.*)",
+            "dest": "/src/index.mjs"
+        }
+    ],
+    "env": {
+        "NODE_ENV": "production"
+    }
+}

@@ -1,0 +1,35 @@
+name: Send Daily Alert Notifications
+on:
+  workflow_dispatch:
+
+jobs:
+  send-alerts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get Farm ID and Send Alerts
+        run: |
+          # Get active alerts with error handling
+          RESPONSE=$(curl -s "${{ secrets.API_BASE_URL }}/api/v1/alerts/active")
+          echo "API Response: $RESPONSE"
+
+          # Check if response contains data
+          if echo "$RESPONSE" | jq -e '.data[0]' > /dev/null 2>&1; then
+            FARM_ID=$(echo "$RESPONSE" | jq -r '.data[0].farm_id')
+            echo "Farm ID: $FARM_ID"
+            
+            # Validate farm ID is not null or empty
+            if [ "$FARM_ID" != "null" ] && [ -n "$FARM_ID" ]; then
+              echo "Sending alerts for farm: $FARM_ID"
+              MAIL_RESPONSE=$(curl -X POST "${{ secrets.API_BASE_URL }}/api/v1/alerts/mail/$FARM_ID")
+              echo "Mail API Response: $MAIL_RESPONSE"
+            else
+              echo "Error: Farm ID is null or empty"
+              exit 1
+            fi
+          else
+            echo "Error: No active alerts found or API returned empty data"
+            echo "Full response: $RESPONSE"
+            exit 1
+          fi
+        env:
+          NODE_ENV: production

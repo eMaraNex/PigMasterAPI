@@ -140,28 +140,29 @@ class BreedingService {
             });
 
             // Create scheduled alerts (trigger day before and on the date)
+            // Pig gestation period: 114 days (3 months, 3 weeks, 3 days)
             const alerts = [
                 {
                     name: `Add Nesting Box for ${sow_id}`,
-                    alert_start_date: getUTCDateString(matingDateUTC.add(26, 'day').toDate()) + 'T00:00:00Z',
+                    alert_start_date: getUTCDateString(matingDateUTC.add(110, 'day').toDate()) + 'T00:00:00Z',
                     alert_type: 'breeding',
                     severity: 'high',
-                    message: `Add nesting box for pig ${sow_id} on hutch ${hutch_id || 'unknown'} by ${formatLocalDate(matingDateUTC.add(26, 'day'), 'Africa/Nairobi')}`,
+                    message: `Add nesting box for pig ${sow_id} on hutch ${hutch_id || 'unknown'} by ${formatLocalDate(matingDateUTC.add(110, 'day'), 'Africa/Nairobi')}`,
                     notify_on: [
-                        getUTCDateString(matingDateUTC.add(25, 'day').toDate()) + 'T00:00:00Z',
-                        getUTCDateString(matingDateUTC.add(26, 'day').toDate()) + 'T00:00:00Z'
+                        getUTCDateString(matingDateUTC.add(109, 'day').toDate()) + 'T00:00:00Z',
+                        getUTCDateString(matingDateUTC.add(110, 'day').toDate()) + 'T00:00:00Z'
                     ]
                 },
-                // Birth check alerts (days 28-31)
-                ...Array.from({ length: 4 }, (_, i) => ({
+                // Birth check alerts (days 110-114) - pig gestation period
+                ...Array.from({ length: 5 }, (_, i) => ({
                     name: `Check Birth for ${sow_id}`,
-                    alert_start_date: getUTCDateString(matingDateUTC.add(28 + i, 'day').toDate()) + 'T00:00:00Z',
+                    alert_start_date: getUTCDateString(matingDateUTC.add(110 + i, 'day').toDate()) + 'T00:00:00Z',
                     alert_type: 'birth',
                     severity: 'high',
-                    message: `Check for birth of pig ${sow_id} on hutch ${hutch_id || 'unknown'} on ${formatLocalDate(matingDateUTC.add(28 + i, 'day'), 'Africa/Nairobi')}`,
+                    message: `Check for birth of pig ${sow_id} on hutch ${hutch_id || 'unknown'} on ${formatLocalDate(matingDateUTC.add(110 + i, 'day'), 'Africa/Nairobi')}`,
                     notify_on: [
-                        getUTCDateString(matingDateUTC.add(27 + i, 'day').toDate()) + 'T00:00:00Z',
-                        getUTCDateString(matingDateUTC.add(28 + i, 'day').toDate()) + 'T00:00:00Z'
+                        getUTCDateString(matingDateUTC.add(109 + i, 'day').toDate()) + 'T00:00:00Z',
+                        getUTCDateString(matingDateUTC.add(110 + i, 'day').toDate()) + 'T00:00:00Z'
                     ]
                 }))
             ];

@@ -43,7 +43,7 @@ class PaymentService {
         const checkoutRequestID = await MpesaService.initiateSTKPush(
           phone_number,
           finalAmount,
-          `Sungura Master`,
+          `Pig Master`,
           `Subscription for ${tier || plan}`
         );
 

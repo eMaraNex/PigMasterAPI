@@ -1,10 +1,12 @@
 import express from 'express';
 import BreedingController from '../controllers/breed.controllers.js';
 import authMiddleware from '../middleware/auth.middleware.js';
+import { requireActiveSubscription } from '../middleware/subscription.middleware.js';
 import { validateRequest } from '../middleware/validateRequest.js';
 import { breedingSchema, breedingUpdateSchema, kitSchema, kitUpdateSchema } from '../utils/validator.js';
 
 const router = express.Router();
+const enforceActivePlan = requireActiveSubscription();
 
 /**
  * @swagger
@@ -195,7 +197,7 @@ const router = express.Router();
  *       401:
  *         description: Unauthorized
  */
-router.post('/:farmId', authMiddleware, validateRequest(breedingSchema), BreedingController.createBreedingRecord);
+router.post('/:farmId', authMiddleware, enforceActivePlan, validateRequest(breedingSchema), BreedingController.createBreedingRecord);
 
 /**
  * @swagger
@@ -233,7 +235,7 @@ router.post('/:farmId', authMiddleware, validateRequest(breedingSchema), Breedin
  *       401:
  *         description: Unauthorized
  */
-router.get('/:farmId', authMiddleware, BreedingController.getAllBreedingRecords);
+router.get('/:farmId', authMiddleware, enforceActivePlan, BreedingController.getAllBreedingRecords);
 
 /**
  * @swagger
@@ -278,7 +280,7 @@ router.get('/:farmId', authMiddleware, BreedingController.getAllBreedingRecords)
  *       401:
  *         description: Unauthorized
  */
-router.get('/:farmId/:recordId', authMiddleware, BreedingController.getBreedingRecordById);
+router.get('/:farmId/:recordId', authMiddleware, enforceActivePlan, BreedingController.getBreedingRecordById);
 
 /**
  * @swagger
@@ -340,7 +342,7 @@ router.get('/:farmId/:recordId', authMiddleware, BreedingController.getBreedingR
  *       401:
  *         description: Unauthorized
  */
-router.put('/:farmId/:recordId', authMiddleware, validateRequest(breedingUpdateSchema), BreedingController.updateBreedingRecord);
+router.put('/:farmId/:recordId', authMiddleware, enforceActivePlan, validateRequest(breedingUpdateSchema), BreedingController.updateBreedingRecord);
 
 /**
  * @swagger
@@ -389,7 +391,7 @@ router.put('/:farmId/:recordId', authMiddleware, validateRequest(breedingUpdateS
  *       401:
  *         description: Unauthorized
  */
-router.delete('/:farmId/:recordId', authMiddleware, BreedingController.deleteBreedingRecord);
+router.delete('/:farmId/:recordId', authMiddleware, enforceActivePlan, BreedingController.deleteBreedingRecord);
 
 /**
  * @swagger
@@ -433,8 +435,8 @@ router.delete('/:farmId/:recordId', authMiddleware, BreedingController.deleteBre
  *       401:
  *         description: Unauthorized
  */
-router.post('/kits/:farmId', authMiddleware, BreedingController.createKitRecord);
-// router.post('/kits/:farmId', authMiddleware, validateRequest(kitSchema), BreedingController.createKitRecord);
+router.post('/kits/:farmId', authMiddleware, enforceActivePlan, BreedingController.createKitRecord);
+// router.post('/kits/:farmId', authMiddleware, enforceActivePlan, validateRequest(kitSchema), BreedingController.createKitRecord);
 
 /**
  * @swagger
@@ -488,9 +490,9 @@ router.post('/kits/:farmId', authMiddleware, BreedingController.createKitRecord)
  *       401:
  *         description: Unauthorized
  */
-router.put('/kits/:kitId', authMiddleware, validateRequest(kitUpdateSchema), BreedingController.updateKitRecord);
+router.put('/kits/:kitId', authMiddleware, enforceActivePlan, validateRequest(kitUpdateSchema), BreedingController.updateKitRecord);
 
 // Get breeding history of a single pig using its pig id.
-router.get('/history/:farmId/:pigId', authMiddleware, BreedingController.getBreedingHistoryByPigId);
+router.get('/history/:farmId/:pigId', authMiddleware, enforceActivePlan, BreedingController.getBreedingHistoryByPigId);
 
 export default router;

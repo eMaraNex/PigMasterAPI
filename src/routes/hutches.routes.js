@@ -4,8 +4,10 @@ import HutchesController from '../controllers/hutches.controllers.js';
 import { validateRequest } from '../middleware/validateRequest.js';
 import { hutchSchema, hutchUpdateSchema } from '../utils/validator.js';
 import authMiddleware from '../middleware/auth.middleware.js';
+import { requireActiveSubscription } from '../middleware/subscription.middleware.js';
 
 const router = express.Router();
+const enforceActivePlan = requireActiveSubscription();
 
 /**
  * @swagger
@@ -199,8 +201,8 @@ const router = express.Router();
  *       401:
  *         description: Unauthorized
  */
-// router.post('/:farmId', authMiddleware, validateRequest(hutchSchema), HutchesController.createHutch);
-router.post('/:farmId', authMiddleware, HutchesController.createHutch);
+// router.post('/:farmId', authMiddleware, enforceActivePlan, validateRequest(hutchSchema), HutchesController.createHutch);
+router.post('/:farmId', authMiddleware, enforceActivePlan, HutchesController.createHutch);
 
 
 /**
@@ -246,7 +248,7 @@ router.post('/:farmId', authMiddleware, HutchesController.createHutch);
  *       401:
  *         description: Unauthorized
  */
-router.get('/:farmId/:id', authMiddleware, HutchesController.getHutch);
+router.get('/:farmId/:id', authMiddleware, enforceActivePlan, HutchesController.getHutch);
 
 /**
  * @swagger
@@ -311,7 +313,7 @@ router.get('/:farmId/:id', authMiddleware, HutchesController.getHutch);
  *       401:
  *         description: Unauthorized
  */
-router.get('/:farmId', authMiddleware, HutchesController.getAllHutches);
+router.get('/:farmId', authMiddleware, enforceActivePlan, HutchesController.getAllHutches);
 
 /**
  * @swagger
@@ -408,7 +410,7 @@ router.get('/:farmId', authMiddleware, HutchesController.getAllHutches);
  *       401:
  *         description: Unauthorized
  */
-router.put('/:farmId/:id', authMiddleware, validateRequest(hutchUpdateSchema), HutchesController.updateHutch);
+router.put('/:farmId/:id', authMiddleware, enforceActivePlan, validateRequest(hutchUpdateSchema), HutchesController.updateHutch);
 
 /**
  * @swagger
@@ -453,7 +455,7 @@ router.put('/:farmId/:id', authMiddleware, validateRequest(hutchUpdateSchema), H
  *       401:
  *         description: Unauthorized
  */
-router.delete('/:farmId/:id', authMiddleware, HutchesController.deleteHutch);
+router.delete('/:farmId/:id', authMiddleware, enforceActivePlan, HutchesController.deleteHutch);
 
 /**
  * @swagger
@@ -543,6 +545,6 @@ router.delete('/:farmId/:id', authMiddleware, HutchesController.deleteHutch);
  *       401:
  *         description: Unauthorized
  */
-router.get('/:farmId/:hutchId/history', authMiddleware, HutchesController.getHutchRemovedPigHistory);
+router.get('/:farmId/:hutchId/history', authMiddleware, enforceActivePlan, HutchesController.getHutchRemovedPigHistory);
 
 export default router;

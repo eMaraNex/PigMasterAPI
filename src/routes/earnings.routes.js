@@ -3,8 +3,10 @@ import EarningsController from '../controllers/earnings.controllers.js';
 import { validateRequest } from '../middleware/validateRequest.js';
 import { earningsSchema, earningsUpdateSchema } from '../utils/validator.js';
 import authMiddleware from '../middleware/auth.middleware.js';
+import { requireActiveSubscription } from '../middleware/subscription.middleware.js';
 
 const router = express.Router();
+const enforceActivePlan = requireActiveSubscription();
 
 /**
  * @swagger
@@ -145,7 +147,7 @@ const router = express.Router();
  *       401:
  *         description: Unauthorized
  */
-router.post('/:farmId', authMiddleware, validateRequest(earningsSchema), EarningsController.createEarnings);
+router.post('/:farmId', authMiddleware, enforceActivePlan, validateRequest(earningsSchema), EarningsController.createEarnings);
 
 /**
  * @swagger
@@ -187,7 +189,7 @@ router.post('/:farmId', authMiddleware, validateRequest(earningsSchema), Earning
  *       401:
  *         description: Unauthorized
  */
-router.get('/:farmId/:id', authMiddleware, EarningsController.getEarnings);
+router.get('/:farmId/:id', authMiddleware, enforceActivePlan, EarningsController.getEarnings);
 
 /**
  * @swagger
@@ -246,7 +248,7 @@ router.get('/:farmId/:id', authMiddleware, EarningsController.getEarnings);
  *       401:
  *         description: Unauthorized
  */
-router.get('/:farmId', authMiddleware, EarningsController.getAllEarnings);
+router.get('/:farmId', authMiddleware, enforceActivePlan, EarningsController.getAllEarnings);
 
 /**
  * @swagger
@@ -332,7 +334,7 @@ router.get('/:farmId', authMiddleware, EarningsController.getAllEarnings);
  *       401:
  *         description: Unauthorized
  */
-router.put('/:farmId/:id', authMiddleware, validateRequest(earningsUpdateSchema), EarningsController.updateEarnings);
+router.put('/:farmId/:id', authMiddleware, enforceActivePlan, validateRequest(earningsUpdateSchema), EarningsController.updateEarnings);
 
 /**
  * @swagger
@@ -374,6 +376,6 @@ router.put('/:farmId/:id', authMiddleware, validateRequest(earningsUpdateSchema)
  *       401:
  *         description: Unauthorized
  */
-router.delete('/:farmId/:id', authMiddleware, EarningsController.deleteEarnings);
+router.delete('/:farmId/:id', authMiddleware, enforceActivePlan, EarningsController.deleteEarnings);
 
 export default router;

@@ -3,8 +3,10 @@ import RowsController from '../controllers/rows.controllers.js';
 import { validateRequest } from '../middleware/validateRequest.js';
 import { rowSchema, rowUpdateSchema, rowExpandSchema } from '../utils/validator.js';
 import authMiddleware from '../middleware/auth.middleware.js';
+import { requireActiveSubscription } from '../middleware/subscription.middleware.js';
 
 const router = express.Router();
+const enforceActivePlan = requireActiveSubscription();
 
 /**
  * @swagger
@@ -121,7 +123,7 @@ const router = express.Router();
  *       401:
  *         description: Unauthorized
  */
-router.post('/create/:farmId', authMiddleware, RowsController.createRow);
+router.post('/create/:farmId', authMiddleware, enforceActivePlan, RowsController.createRow);
 
 /**
  * @swagger
@@ -160,7 +162,7 @@ router.post('/create/:farmId', authMiddleware, RowsController.createRow);
  *       401:
  *         description: Unauthorized
  */
-router.get('/list/:farmId', authMiddleware, RowsController.getAllRows);
+router.get('/list/:farmId', authMiddleware, enforceActivePlan, RowsController.getAllRows);
 
 /**
  * @swagger
@@ -205,7 +207,7 @@ router.get('/list/:farmId', authMiddleware, RowsController.getAllRows);
  *       401:
  *         description: Unauthorized
  */
-router.get('/list/:farmId/:rowId', authMiddleware, RowsController.getRowByName);
+router.get('/list/:farmId/:rowId', authMiddleware, enforceActivePlan, RowsController.getRowByName);
 
 /**
  * @swagger
@@ -265,7 +267,7 @@ router.get('/list/:farmId/:rowId', authMiddleware, RowsController.getRowByName);
  *       401:
  *         description: Unauthorized
  */
-router.put('/update/:farmId/:rowId', authMiddleware, RowsController.updateRow);
+router.put('/update/:farmId/:rowId', authMiddleware, enforceActivePlan, RowsController.updateRow);
 
 /**
  * @swagger
@@ -310,7 +312,7 @@ router.put('/update/:farmId/:rowId', authMiddleware, RowsController.updateRow);
  *       401:
  *         description: Unauthorized
  */
-router.delete('/delete/:farmId/:rowId', authMiddleware, RowsController.deleteRow);
+router.delete('/delete/:farmId/:rowId', authMiddleware, enforceActivePlan, RowsController.deleteRow);
 
 /**
  * @swagger
@@ -349,8 +351,8 @@ router.delete('/delete/:farmId/:rowId', authMiddleware, RowsController.deleteRow
  *       401:
  *         description: Unauthorized
  */
-// router.post('/expand', authMiddleware, validateRequest(rowExpandSchema), RowsController.expandRowCapacity);
-router.post('/expand', authMiddleware, RowsController.expandRowCapacity);
+// router.post('/expand', authMiddleware, enforceActivePlan, validateRequest(rowExpandSchema), RowsController.expandRowCapacity);
+router.post('/expand', authMiddleware, enforceActivePlan, RowsController.expandRowCapacity);
 
 
 export default router;

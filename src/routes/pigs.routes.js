@@ -3,8 +3,10 @@ import PigsController from '../controllers/pigs.controllers.js';
 import authMiddleware from '../middleware/auth.middleware.js';
 import { validateRequest } from '../middleware/validateRequest.js';
 import { pigSchema, pigUpdateSchema, pigDeleteSchema } from '../utils/validator.js';
+import { requireActiveSubscription } from '../middleware/subscription.middleware.js';
 
 const router = express.Router();
+const enforceActivePlan = requireActiveSubscription();
 
 /**
  * @swagger
@@ -217,7 +219,7 @@ const router = express.Router();
  *       404:
  *         description: Hutch not found
  */
-router.post('/:farmId', authMiddleware, validateRequest(pigSchema), PigsController.createPig);
+router.post('/:farmId', authMiddleware, enforceActivePlan, validateRequest(pigSchema), PigsController.createPig);
 
 /**
  * @swagger
@@ -262,7 +264,7 @@ router.post('/:farmId', authMiddleware, validateRequest(pigSchema), PigsControll
  *       401:
  *         description: Unauthorized
  */
-router.get('/:farmId', authMiddleware, PigsController.getAllPigs);
+router.get('/:farmId', authMiddleware, enforceActivePlan, PigsController.getAllPigs);
 
 /**
  * @swagger
@@ -308,7 +310,7 @@ router.get('/:farmId', authMiddleware, PigsController.getAllPigs);
  *       401:
  *         description: Unauthorized
  */
-router.get('/:farmId/:pigId', authMiddleware, PigsController.getPigById);
+router.get('/:farmId/:pigId', authMiddleware, enforceActivePlan, PigsController.getPigById);
 
 /**
  * @swagger
@@ -362,7 +364,7 @@ router.get('/:farmId/:pigId', authMiddleware, PigsController.getPigById);
  *       401:
  *         description: Unauthorized
  */
-router.put('/:farmId/:pigId', authMiddleware, validateRequest(pigUpdateSchema), PigsController.updatePig);
+router.put('/:farmId/:pigId', authMiddleware, enforceActivePlan, validateRequest(pigUpdateSchema), PigsController.updatePig);
 
 /**
  * @swagger
@@ -416,9 +418,9 @@ router.put('/:farmId/:pigId', authMiddleware, validateRequest(pigUpdateSchema), 
  *       401:
  *         description: Unauthorized
  */
-router.post('/pig_removals/:farmId/:pigId', authMiddleware, validateRequest(pigDeleteSchema), PigsController.deletePig);
+router.post('/pig_removals/:farmId/:pigId', authMiddleware, enforceActivePlan, validateRequest(pigDeleteSchema), PigsController.deletePig);
 
 
-router.all('/:farmId/details', authMiddleware, PigsController.getAllPigDetails);
+router.all('/:farmId/details', authMiddleware, enforceActivePlan, PigsController.getAllPigDetails);
 
 export default router;

@@ -16,6 +16,8 @@ import earningsRoutes from './routes/earnings.routes.js';
 import breedRoutes from './routes/breed.routes.js';
 import farmRoutes from './routes/farms.routes.js';
 import alertRoutes from './routes/alerts.routes.js';
+import healthRoutes from './routes/health.routes.js';
+import feedingRoutes from './routes/feeding.routes.js';
 import paymentRoutes from './routes/payments.routes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { runSetUp } from './database/runSetup.js';
@@ -124,6 +126,8 @@ apiRouter.use('/earnings', earningsRoutes);
 apiRouter.use('/breeds', breedRoutes);
 apiRouter.use('/farms', farmRoutes);
 apiRouter.use('/alerts', alertRoutes);
+apiRouter.use('/health', healthRoutes);
+apiRouter.use('/feeding', feedingRoutes);
 apiRouter.use('/payments', paymentRoutes);
 
 app.use('/api/v1', apiRouter);

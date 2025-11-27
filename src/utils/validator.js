@@ -429,3 +429,69 @@ export const paymentSchema = Joi.object({
   metadata: Joi.object().unknown(true).optional(), // Allow any keys in metadata
   tier: Joi.string().optional()
 });
+
+// Health records schema
+export const healthSchema = Joi.object({
+    pig_id: Joi.string().max(200).required(),
+    type: Joi.string().valid('vaccination', 'treatment', 'checkup', 'medication', 'surgery', 'other').required(),
+    description: Joi.string().required(),
+    date: Joi.date().required(),
+    next_due: Joi.date().allow(null).optional(),
+    status: Joi.string().valid('scheduled','completed','pending').optional().default('completed'),
+    veterinarian: Joi.string().max(100).allow(null).optional(),
+    notes: Joi.string().allow(null).optional(),
+});
+
+export const healthUpdateSchema = Joi.object({
+    type: Joi.string().valid('vaccination', 'treatment', 'checkup', 'medication', 'surgery', 'other').optional(),
+    description: Joi.string().optional(),
+    date: Joi.date().optional(),
+    next_due: Joi.date().allow(null).optional(),
+    status: Joi.string().valid('scheduled','completed','pending').optional(),
+    veterinarian: Joi.string().max(100).allow(null).optional(),
+    notes: Joi.string().allow(null).optional(),
+}).min(1);
+
+// Feeding schedule record schema
+export const feedingScheduleSchema = Joi.object({
+    pig_id: Joi.string().max(200).required(),
+    daily_amount: Joi.string().required(),
+    feed_type: Joi.string().required(),
+    times: Joi.array().items(Joi.string()).required(),
+    special_diet: Joi.string().allow(null).optional(),
+    last_fed: Joi.date().allow(null).optional(),
+    is_active: Joi.boolean().default(false)
+});
+
+export const feedingScheduleUpdateSchema = Joi.object({
+    daily_amount: Joi.string().optional(),
+    feed_type: Joi.string().optional(),
+    times: Joi.array().items(Joi.string()).optional(),
+    special_diet: Joi.string().allow(null).optional(),
+    last_fed: Joi.date().allow(null).optional(),
+    is_active: Joi.boolean().optional()
+}).min(1);
+
+// Feeding records schema
+export const feedingRecordSchema = Joi.object({
+    pig_id: Joi.string().max(200).allow(null).optional(),
+    hutch_id: Joi.string().uuid().allow(null).optional(),
+    farm_id: Joi.string().uuid().required(),
+    feed_type: Joi.string().required(),
+    amount: Joi.string().required(),
+    unit: Joi.string().default('grams'),
+    feeding_time: Joi.date().required(),
+    fed_by: Joi.string().uuid().allow(null).optional(),
+    notes: Joi.string().allow(null).optional(),
+});
+
+export const feedingRecordUpdateSchema = Joi.object({
+    pig_id: Joi.string().max(200).allow(null).optional(),
+    hutch_id: Joi.string().uuid().allow(null).optional(),
+    feed_type: Joi.string().optional(),
+    amount: Joi.string().optional(),
+    unit: Joi.string().optional(),
+    feeding_time: Joi.date().optional(),
+    fed_by: Joi.string().uuid().allow(null).optional(),
+    notes: Joi.string().allow(null).optional(),
+}).min(1);

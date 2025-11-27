@@ -143,7 +143,29 @@ class PigsService {
                         )
                     )
                     FROM pig_birth_history rbh
-                    WHERE rbh.sow_id = r.pig_id AND rbh.farm_id = r.farm_id AND rbh.is_deleted = 0) AS birth_history
+                    WHERE rbh.sow_id = r.pig_id AND rbh.farm_id = r.farm_id AND rbh.is_deleted = 0) AS birth_history,
+                    (SELECT JSON_AGG(
+                        JSON_BUILD_OBJECT(
+                            'id', hr.id,
+                            'type', hr.type,
+                            'description', hr.description,
+                            'date', hr.date,
+                            'next_due', hr.next_due,
+                            'status', hr.status,
+                            'veterinarian', hr.veterinarian,
+                            'notes', hr.notes,
+                            'created_at', hr.created_at
+                        ) ORDER BY hr.date DESC
+                    ) FROM health_records hr WHERE hr.pig_id = r.pig_id AND hr.is_deleted = 0) AS healthRecords,
+                    (SELECT JSON_BUILD_OBJECT(
+                        'id', fs.id,
+                        'dailyAmount', fs.daily_amount,
+                        'feedType', fs.feed_type,
+                        'times', fs.times,
+                        'specialDiet', fs.special_diet,
+                        'lastFed', fs.last_fed,
+                        'isActive', fs.is_active
+                    ) FROM feeding_schedules fs WHERE fs.pig_id = r.pig_id AND fs.is_deleted = 0 LIMIT 1) AS feedingSchedule
                 FROM pigs r
                 LEFT JOIN hutches h ON r.hutch_id = h.id AND r.farm_id = h.farm_id
                 WHERE r.pig_id = $1 AND r.farm_id = $2 AND r.is_deleted = 0
@@ -491,7 +513,29 @@ class PigsService {
                     )
                 )
                 FROM pig_birth_history rbh
-                WHERE rbh.sow_id = r.pig_id AND rbh.farm_id = r.farm_id AND rbh.is_deleted = 0) AS birth_history
+                WHERE rbh.sow_id = r.pig_id AND rbh.farm_id = r.farm_id AND rbh.is_deleted = 0) AS birth_history,
+                    (SELECT JSON_AGG(
+                        JSON_BUILD_OBJECT(
+                            'id', hr.id,
+                            'type', hr.type,
+                            'description', hr.description,
+                            'date', hr.date,
+                            'next_due', hr.next_due,
+                            'status', hr.status,
+                            'veterinarian', hr.veterinarian,
+                            'notes', hr.notes,
+                            'created_at', hr.created_at
+                        ) ORDER BY hr.date DESC
+                    ) FROM health_records hr WHERE hr.pig_id = r.pig_id AND hr.is_deleted = 0) AS healthRecords,
+                    (SELECT JSON_BUILD_OBJECT(
+                        'id', fs.id,
+                        'dailyAmount', fs.daily_amount,
+                        'feedType', fs.feed_type,
+                        'times', fs.times,
+                        'specialDiet', fs.special_diet,
+                        'lastFed', fs.last_fed,
+                        'isActive', fs.is_active
+                    ) FROM feeding_schedules fs WHERE fs.pig_id = r.pig_id AND fs.is_deleted = 0 LIMIT 1) AS feedingSchedule
             FROM pigs r
             LEFT JOIN hutches h ON r.hutch_id = h.id AND r.farm_id = h.farm_id
             ${filteredWhereClause}

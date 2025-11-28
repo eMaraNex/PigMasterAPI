@@ -115,7 +115,8 @@ class FeedingService {
 
     /** Feeding schedule functions */
     static async createFeedingSchedule(data, userId) {
-        const { pig_id, daily_amount, feed_type, times, special_diet, last_fed, is_active = false } = data;
+        // times can be either an array of times or a richer object with frequency details
+        const { pig_id, daily_amount, feed_type, times, frequency = 'daily', frequency_interval = 1, days = [], special_diet, last_fed, is_active = false } = data;
         if (!pig_id || !daily_amount || !feed_type || !times) {
             throw new ValidationError('Missing required feeding schedule fields');
         }
@@ -127,11 +128,13 @@ class FeedingService {
                 throw new ValidationError('Pig not found');
             }
 
+            const timesPayload = typeof times === 'string' ? times : JSON.stringify({ times, frequency, frequency_interval, days });
+
             const result = await DatabaseHelper.executeQuery(
                 `INSERT INTO feeding_schedules (
                     id, pig_id, daily_amount, feed_type, times, special_diet, last_fed, is_active, is_deleted, created_at, updated_at
                 ) VALUES (uuid_generate_v4(), $1, $2, $3, $4, $5, $6, $7, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) RETURNING *`,
-                [pig_id, daily_amount, feed_type, JSON.stringify(times), special_diet || null, last_fed || null, is_active ? 1 : 0]
+                [pig_id, daily_amount, feed_type, timesPayload, special_diet || null, last_fed || null, is_active ? 1 : 0]
             );
             logger.info(`Feeding schedule created by user ${userId} for pig ${pig_id}`);
             return result.rows[0];
@@ -144,7 +147,17 @@ class FeedingService {
     static async getScheduleByPig(pigId) {
         try {
             const result = await DatabaseHelper.executeQuery('SELECT * FROM feeding_schedules WHERE pig_id = $1 AND is_deleted = 0', [pigId]);
-            return result.rows;
+            // parse times JSON if it was stored as a JSON string
+            return result.rows.map((r) => {
+                try {
+                    if (r.times && typeof r.times === 'string') {
+                        r.times = JSON.parse(r.times);
+                    }
+                } catch (e) {
+                    // leave as-is
+                }
+                return r;
+            });
         } catch (error) {
             logger.error(`Error fetching feeding schedule for pig ${pigId}: ${error.message}`);
             throw error;
@@ -153,7 +166,7 @@ class FeedingService {
 
     static async updateFeedingSchedule(id, data, userId) {
         try {
-            const { daily_amount, feed_type, times, special_diet, last_fed, is_active } = data;
+            const { daily_amount, feed_type, times, frequency, frequency_interval, days, special_diet, last_fed, is_active } = data;
             const result = await DatabaseHelper.executeQuery(
                 `UPDATE feeding_schedules SET
                     daily_amount = COALESCE($2, daily_amount),
@@ -164,7 +177,8 @@ class FeedingService {
                     is_active = COALESCE($7, is_active),
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = $1 AND is_deleted = 0 RETURNING *`,
-                [id, daily_amount || null, feed_type || null, times ? JSON.stringify(times) : null, special_diet || null, last_fed || null, is_active === undefined ? null : (is_active ? 1 : 0)]
+                // if times is an object or has frequency info ensure it's stringified for storage
+                [id, daily_amount || null, feed_type || null, times ? (typeof times === 'string' ? times : JSON.stringify(times)) : null, special_diet || null, last_fed || null, is_active === undefined ? null : (is_active ? 1 : 0)]
             );
             if (result.rows.length === 0) throw new ValidationError('Feeding schedule not found');
             logger.info(`Feeding schedule ${id} updated by user ${userId}`);

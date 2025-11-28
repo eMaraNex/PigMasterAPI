@@ -7,6 +7,10 @@ class HealthController {
   static async createRecord(req, res, next) {
     try {
       const data = req.body;
+      // allow farmId provided via route param (/health/:farmId)
+      if (!data.farm_id && req.params?.farmId) {
+        data.farm_id = req.params.farmId;
+      }
       const userId = req.user?.id;
       if (!userId) throw new ValidationError('User not authenticated');
 

@@ -457,7 +457,12 @@ export const feedingScheduleSchema = Joi.object({
     pig_id: Joi.string().max(200).required(),
     daily_amount: Joi.string().required(),
     feed_type: Joi.string().required(),
-    times: Joi.array().items(Joi.string()).required(),
+    // times can be an array of schedule times or a richer object (json) stored as times
+    times: Joi.alternatives().try(Joi.array().items(Joi.string()), Joi.object()).required(),
+    // optional frequency fields to support recurring schedules
+    frequency: Joi.string().valid('daily','weekly','monthly').default('daily'),
+    frequency_interval: Joi.number().integer().min(1).default(1),
+    days: Joi.array().items(Joi.number().integer().min(0).max(6)).optional(),
     special_diet: Joi.string().allow(null).optional(),
     last_fed: Joi.date().allow(null).optional(),
     is_active: Joi.boolean().default(false)
@@ -466,7 +471,10 @@ export const feedingScheduleSchema = Joi.object({
 export const feedingScheduleUpdateSchema = Joi.object({
     daily_amount: Joi.string().optional(),
     feed_type: Joi.string().optional(),
-    times: Joi.array().items(Joi.string()).optional(),
+    times: Joi.alternatives().try(Joi.array().items(Joi.string()), Joi.object()).optional(),
+    frequency: Joi.string().valid('daily','weekly','monthly').optional(),
+    frequency_interval: Joi.number().integer().min(1).optional(),
+    days: Joi.array().items(Joi.number().integer().min(0).max(6)).optional(),
     special_diet: Joi.string().allow(null).optional(),
     last_fed: Joi.date().allow(null).optional(),
     is_active: Joi.boolean().optional()
@@ -484,6 +492,23 @@ export const feedingRecordSchema = Joi.object({
     fed_by: Joi.string().uuid().allow(null).optional(),
     notes: Joi.string().allow(null).optional(),
 });
+
+export const vaccinationScheduleSchema = Joi.object({
+    farm_id: Joi.string().uuid().required(),
+    vaccine_name: Joi.string().max(100).required(),
+    description: Joi.string().allow(null).optional(),
+    frequency_days: Joi.number().integer().min(1).required(),
+    age_start_days: Joi.number().integer().min(0).optional().default(0),
+    is_active: Joi.boolean().default(true)
+});
+
+export const vaccinationScheduleUpdateSchema = Joi.object({
+    vaccine_name: Joi.string().max(100).optional(),
+    description: Joi.string().allow(null).optional(),
+    frequency_days: Joi.number().integer().min(1).optional(),
+    age_start_days: Joi.number().integer().min(0).optional(),
+    is_active: Joi.boolean().optional()
+}).min(1);
 
 export const feedingRecordUpdateSchema = Joi.object({
     pig_id: Joi.string().max(200).allow(null).optional(),

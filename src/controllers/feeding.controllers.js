@@ -7,6 +7,10 @@ class FeedingController {
     static async createRecord(req, res, next) {
         try {
             const data = req.body;
+            // allow farmId provided via route param (/record/:farmId)
+            if (!data.farm_id && req.params?.farmId) {
+                data.farm_id = req.params.farmId;
+            }
             const userId = req.user?.id;
             if (!userId) throw new ValidationError('User not authenticated');
 
@@ -77,6 +81,8 @@ class FeedingController {
             const userId = req.user?.id;
             if (!userId) throw new ValidationError('User not authenticated');
             const data = req.body;
+            // allow farmId in params for schedules too
+            if (!data.farm_id && req.params?.farmId) data.farm_id = req.params.farmId;
             const schedule = await FeedingService.createFeedingSchedule(data, userId);
             return SuccessResponse(res, 201, 'Feeding schedule created successfully', schedule);
         } catch (error) {

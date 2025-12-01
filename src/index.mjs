@@ -78,12 +78,18 @@ app.use(helmet({
     },
 }));
 
-app.use(cors({
-    origin: ['https://pigmaster.emaranex.com', 'http://localhost:3000', 'https://pigmasteruibeta.vercel.app'],
+app.use(
+  cors({
+    origin: [
+      "https://pigmaster.emaranex.com",
+      "http://localhost:3000",
+      "https://pig-master-ui.vercel.app",
+    ],
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-}));
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
 
 app.use(bodyParser.json());
 app.use(express.json());

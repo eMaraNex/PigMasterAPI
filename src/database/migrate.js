@@ -1056,6 +1056,6 @@ async function runMigrations() {
   }
 }
 
-runMigrations();
+// runMigrations();
 
 export default runMigrations;

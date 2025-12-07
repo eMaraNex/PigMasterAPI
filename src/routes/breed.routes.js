@@ -1,9 +1,14 @@
-import express from 'express';
-import BreedingController from '../controllers/breed.controllers.js';
-import authMiddleware from '../middleware/auth.middleware.js';
-import { requireActiveSubscription } from '../middleware/subscription.middleware.js';
-import { validateRequest } from '../middleware/validateRequest.js';
-import { breedingSchema, breedingUpdateSchema, kitSchema, kitUpdateSchema } from '../utils/validator.js';
+import express from "express";
+import BreedingController from "../controllers/breed.controllers.js";
+import authMiddleware from "../middleware/auth.middleware.js";
+import { requireActiveSubscription } from "../middleware/subscription.middleware.js";
+import { validateRequest } from "../middleware/validateRequest.js";
+import {
+  breedingSchema,
+  breedingUpdateSchema,
+  pigletSchema,
+  pigletUpdateSchema,
+} from "../utils/validator.js";
 
 const router = express.Router();
 const enforceActivePlan = requireActiveSubscription();
@@ -44,9 +49,9 @@ const enforceActivePlan = requireActiveSubscription();
  *           format: date
  *           description: The actual birth date
  *           nullable: true
- *         number_of_kits:
+ *         number_of_piglets:
  *           type: integer
- *           description: Number of kits born
+ *           description: Number of piglets born
  *           nullable: true
  *         notes:
  *           type: string
@@ -68,10 +73,10 @@ const enforceActivePlan = requireActiveSubscription();
  *           type: string
  *           format: date-time
  *           description: Last update timestamp
- *         kits:
+ *         piglets:
  *           type: array
  *           items:
- *             $ref: '#/components/schemas/KitRecord'
+ *             $ref: '#/components/schemas/PigletRecord'
  *       example:
  *         farm_id: 123e4567-e89b-12d3-a456-426614174000
  *         sow_id: A1
@@ -79,27 +84,27 @@ const enforceActivePlan = requireActiveSubscription();
  *         mating_date: 2025-06-03
  *         expected_birth_date: 2025-07-01
  *         actual_birth_date: 2025-07-01
- *         number_of_kits: 6
+ *         number_of_piglets: 6
  *         notes: Successful mating
  *         alert_date: 2025-06-24
  *         is_deleted: 0
  *         created_at: 2025-06-03T02:13:00Z
  *         updated_at: 2025-06-03T02:13:00Z
- *         kits:
+ *         piglets:
  *           - id: 987fcdeb-4567-89ab-cdef-0123456789ab
- *             kit_number: 1
+ *             piglet_number: 1
  *             birth_weight: 0.75
  *             gender: male
  *             color: white
  *             status: alive
  *             weaning_date: 2025-08-12
  *             weaning_weight: 1.5
- *             notes: Healthy kit
- *     KitRecord:
+ *             notes: Healthy piglet
+ *     PigletRecord:
  *       type: object
  *       required:
  *         - breeding_record_id
- *         - kit_number
+ *         - piglet_number
  *         - birth_weight
  *         - gender
  *         - color
@@ -108,22 +113,22 @@ const enforceActivePlan = requireActiveSubscription();
  *           type: string
  *           format: uuid
  *           description: The ID of the breeding record
- *         kit_number:
+ *         piglet_number:
  *           type: integer
- *           description: The kit's number in the litter
+ *           description: The piglet's number in the litter
  *         birth_weight:
  *           type: number
  *           description: Birth weight in kilograms
  *         gender:
  *           type: string
  *           enum: [male, female]
- *           description: The gender of the kit
+ *           description: The gender of the piglet
  *         color:
  *           type: string
- *           description: The color of the kit
+ *           description: The color of the piglet
  *         status:
  *           type: string
- *           description: The status of the kit (e.g., alive, deceased)
+ *           description: The status of the piglet (e.g., alive, deceased)
  *         weaning_date:
  *           type: string
  *           format: date
@@ -150,14 +155,14 @@ const enforceActivePlan = requireActiveSubscription();
  *           description: Last update timestamp
  *       example:
  *         breeding_record_id: 123e4567-e89b-12d3-a456-426614174000
- *         kit_number: 1
+ *         piglet_number: 1
  *         birth_weight: 0.75
  *         gender: male
  *         color: white
  *         status: alive
  *         weaning_date: 2025-08-12
  *         weaning_weight: 1.5
- *         notes: Healthy kit
+ *         notes: Healthy piglet
  *         is_deleted: 0
  *         created_at: 2025-07-01T02:13:00Z
  *         updated_at: 2025-07-01T02:13:00Z
@@ -197,7 +202,13 @@ const enforceActivePlan = requireActiveSubscription();
  *       401:
  *         description: Unauthorized
  */
-router.post('/:farmId', authMiddleware, enforceActivePlan, validateRequest(breedingSchema), BreedingController.createBreedingRecord);
+router.post(
+  "/:farmId",
+  authMiddleware,
+  enforceActivePlan,
+  validateRequest(breedingSchema),
+  BreedingController.createBreedingRecord
+);
 
 /**
  * @swagger
@@ -235,7 +246,12 @@ router.post('/:farmId', authMiddleware, enforceActivePlan, validateRequest(breed
  *       401:
  *         description: Unauthorized
  */
-router.get('/:farmId', authMiddleware, enforceActivePlan, BreedingController.getAllBreedingRecords);
+router.get(
+  "/:farmId",
+  authMiddleware,
+  enforceActivePlan,
+  BreedingController.getAllBreedingRecords
+);
 
 /**
  * @swagger
@@ -280,7 +296,12 @@ router.get('/:farmId', authMiddleware, enforceActivePlan, BreedingController.get
  *       401:
  *         description: Unauthorized
  */
-router.get('/:farmId/:recordId', authMiddleware, enforceActivePlan, BreedingController.getBreedingRecordById);
+router.get(
+  "/:farmId/:recordId",
+  authMiddleware,
+  enforceActivePlan,
+  BreedingController.getBreedingRecordById
+);
 
 /**
  * @swagger
@@ -316,7 +337,7 @@ router.get('/:farmId/:recordId', authMiddleware, enforceActivePlan, BreedingCont
  *               actual_birth_date:
  *                 type: string
  *                 format: date
- *               number_of_kits:
+ *               number_of_piglets:
  *                 type: integer
  *               notes:
  *                 type: string
@@ -342,7 +363,13 @@ router.get('/:farmId/:recordId', authMiddleware, enforceActivePlan, BreedingCont
  *       401:
  *         description: Unauthorized
  */
-router.put('/:farmId/:recordId', authMiddleware, enforceActivePlan, validateRequest(breedingUpdateSchema), BreedingController.updateBreedingRecord);
+router.put(
+  "/:farmId/:recordId",
+  authMiddleware,
+  enforceActivePlan,
+  validateRequest(breedingUpdateSchema),
+  BreedingController.updateBreedingRecord
+);
 
 /**
  * @swagger
@@ -391,13 +418,18 @@ router.put('/:farmId/:recordId', authMiddleware, enforceActivePlan, validateRequ
  *       401:
  *         description: Unauthorized
  */
-router.delete('/:farmId/:recordId', authMiddleware, enforceActivePlan, BreedingController.deleteBreedingRecord);
+router.delete(
+  "/:farmId/:recordId",
+  authMiddleware,
+  enforceActivePlan,
+  BreedingController.deleteBreedingRecord
+);
 
 /**
  * @swagger
- * /api/v1/breeding/kits/{breedingRecordId}:
+ * /api/v1/breeding/piglets/{breedingRecordId}:
  *   post:
- *     summary: Create a new kit record
+ *     summary: Create a new piglet record
  *     tags:
  *       - Breeding
  *     security:
@@ -415,10 +447,10 @@ router.delete('/:farmId/:recordId', authMiddleware, enforceActivePlan, BreedingC
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/KitRecord'
+ *             $ref: '#/components/schemas/PigletRecord'
  *     responses:
  *       201:
- *         description: Kit record created successfully
+ *         description: Piglet record created successfully
  *         content:
  *           application/json:
  *             schema:
@@ -429,32 +461,37 @@ router.delete('/:farmId/:recordId', authMiddleware, enforceActivePlan, BreedingC
  *                 message:
  *                   type: string
  *                 data:
- *                   $ref: '#/components/schemas/KitRecord'
+ *                   $ref: '#/components/schemas/PigletRecord'
  *       400:
  *         description: Invalid input
  *       401:
  *         description: Unauthorized
  */
-router.post('/kits/:farmId', authMiddleware, enforceActivePlan, BreedingController.createKitRecord);
-// router.post('/kits/:farmId', authMiddleware, enforceActivePlan, validateRequest(kitSchema), BreedingController.createKitRecord);
+router.post(
+  "/piglets/:farmId",
+  authMiddleware,
+  enforceActivePlan,
+  BreedingController.createPigletRecord
+);
+// router.post('/piglets/:farmId', authMiddleware, enforceActivePlan, validateRequest(pigletSchema), BreedingController.createPigletRecord);
 
 /**
  * @swagger
- * /api/v1/breeding/kits/{kitId}:
+ * /api/v1/breeding/piglets/{pigletId}:
  *   put:
- *     summary: Update a kit record
+ *     summary: Update a piglet record
  *     tags:
  *       - Breeding
  *     security:
  *       - bearerAuth: []
  *     parameters:
  *       - in: path
- *         name: kitId
+ *         name: pigletId
  *         required: true
  *         schema:
  *           type: string
  *           format: uuid
- *         description: The ID of the kit record
+ *         description: The ID of the piglet record
  *     requestBody:
  *       required: true
  *       content:
@@ -471,7 +508,7 @@ router.post('/kits/:farmId', authMiddleware, enforceActivePlan, BreedingControll
  *                 nullable: true
  *     responses:
  *       200:
- *         description: Kit record updated successfully
+ *         description: Piglet record updated successfully
  *         content:
  *           application/json:
  *             schema:
@@ -482,17 +519,28 @@ router.post('/kits/:farmId', authMiddleware, enforceActivePlan, BreedingControll
  *                 message:
  *                   type: string
  *                 data:
- *                   $ref: '#/components/schemas/KitRecord'
+ *                   $ref: '#/components/schemas/PigletRecord'
  *       400:
  *         description: Invalid input
  *       404:
- *         description: Kit record not found
+ *         description: Piglet record not found
  *       401:
  *         description: Unauthorized
  */
-router.put('/kits/:kitId', authMiddleware, enforceActivePlan, validateRequest(kitUpdateSchema), BreedingController.updateKitRecord);
+router.put(
+  "/piglets/:pigletId",
+  authMiddleware,
+  enforceActivePlan,
+  validateRequest(pigletUpdateSchema),
+  BreedingController.updatePigletRecord
+);
 
 // Get breeding history of a single pig using its pig id.
-router.get('/history/:farmId/:pigId', authMiddleware, enforceActivePlan, BreedingController.getBreedingHistoryByPigId);
+router.get(
+  "/history/:farmId/:pigId",
+  authMiddleware,
+  enforceActivePlan,
+  BreedingController.getBreedingHistoryByPigId
+);
 
 export default router;

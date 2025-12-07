@@ -1,143 +1,183 @@
-import { DatabaseHelper } from '../config/database.js';
-import logger from '../middleware/logger.js';
-import { ValidationError } from '../middleware/errors.js';
-import { v4 as uuidv4 } from 'uuid';
+import { DatabaseHelper } from "../config/database.js";
+import logger from "../middleware/logger.js";
+import { ValidationError } from "../middleware/errors.js";
+import { v4 as uuidv4 } from "uuid";
 
 class PigsService {
-    static async createPig(pigData, userId) {
-        const {
-            farm_id, pig_id, name, gender, breed, color, birth_date, weight, hutch_id,
-            parent_male_id, parent_female_id, acquisition_type, acquisition_date, acquisition_cost,
-            is_pregnant, pregnancy_start_date, expected_birth_date, status, notes
-        } = pigData;
-        if (!farm_id || !pig_id || !gender || !breed || !color || !birth_date || !weight) {
-            throw new ValidationError('Missing required pig fields');
+  static async createPig(pigData, userId) {
+    const {
+      farm_id,
+      pig_id,
+      name,
+      gender,
+      breed,
+      color,
+      birth_date,
+      weight,
+      pen_id,
+      parent_male_id,
+      parent_female_id,
+      acquisition_type,
+      acquisition_date,
+      acquisition_cost,
+      is_pregnant,
+      pregnancy_start_date,
+      expected_birth_date,
+      status,
+      notes,
+    } = pigData;
+    if (
+      !farm_id ||
+      !pig_id ||
+      !gender ||
+      !breed ||
+      !color ||
+      !birth_date ||
+      !weight
+    ) {
+      throw new ValidationError("Missing required pig fields");
+    }
+
+    try {
+      // Check if pig_id is unique
+      const existingPig = await DatabaseHelper.executeQuery(
+        "SELECT 1 FROM pigs WHERE pig_id = $1 AND farm_id = $2 AND is_deleted = 0",
+        [pig_id, farm_id]
+      );
+      if (existingPig.rows.length > 0) {
+        throw new ValidationError("Pig ID already exists");
+      }
+
+      // Validate pen
+      let is_occupied = false;
+      if (pen_id) {
+        const penResult = await DatabaseHelper.executeQuery(
+          "SELECT 1 FROM pens WHERE id = $1 AND farm_id = $2 AND is_deleted = 0",
+          [pen_id, farm_id]
+        );
+        if (penResult.rows.length === 0) {
+          throw new ValidationError("Pen not found");
         }
+        // Check pig count to enforce max 6 pigs per pen
+        const pigCount = await DatabaseHelper.executeQuery(
+          "SELECT COUNT(*) FROM pigs WHERE pen_id = $1 AND farm_id = $2 AND is_deleted = 0",
+          [pen_id, farm_id]
+        );
+        if (parseInt(pigCount?.rows[0]?.count || 0) >= 6) {
+          throw new ValidationError("Pen cannot have more than 6 pigs");
+        }
+        is_occupied = true;
+      }
 
-        try {
-            // Check if pig_id is unique
-            const existingPig = await DatabaseHelper.executeQuery(
-                'SELECT 1 FROM pigs WHERE pig_id = $1 AND farm_id = $2 AND is_deleted = 0',
-                [pig_id, farm_id]
-            );
-            if (existingPig.rows.length > 0) {
-                throw new ValidationError('Pig ID already exists');
-            }
+      // // Validate parent IDs if provided
+      // if (parent_male_id) {
+      //     const maleResult = await DatabaseHelper.executeQuery(
+      //         'SELECT 1 FROM pigs WHERE pig_id = $1 AND farm_id = $2 AND gender = $3 AND is_deleted = 0',
+      //         [parent_male_id, farm_id, 'male']
+      //     );
+      //     if (maleResult.rows.length === 0) {
+      //         throw new ValidationError('Parent male pig not found or invalid');
+      //     }
+      // }
+      // if (parent_female_id) {
+      //     const femaleResult = await DatabaseHelper.executeQuery(
+      //         'SELECT 1 FROM pigs WHERE pig_id = $1 AND farm_id = $2 AND gender = $3 AND is_deleted = 0',
+      //         [parent_female_id, farm_id, 'female']
+      //     );
+      //     if (femaleResult.rows.length === 0) {
+      //         throw new ValidationError('Parent female pig not found or invalid');
+      //     }
+      // }
 
-            // Validate hutch
-            let is_occupied = false;
-            if (hutch_id) {
-                const hutchResult = await DatabaseHelper.executeQuery(
-                    'SELECT 1 FROM hutches WHERE id = $1 AND farm_id = $2 AND is_deleted = 0',
-                    [hutch_id, farm_id]
-                );
-                if (hutchResult.rows.length === 0) {
-                    throw new ValidationError('Hutch not found');
-                }
-                // Check pig count to enforce max 6 pigs per hutch
-                const pigCount = await DatabaseHelper.executeQuery(
-                    'SELECT COUNT(*) FROM pigs WHERE hutch_id = $1 AND farm_id = $2 AND is_deleted = 0',
-                    [hutch_id, farm_id]
-                );
-                if (parseInt(pigCount?.rows[0]?.count || 0) >= 6) {
-                    throw new ValidationError('Hutch cannot have more than 6 pigs');
-                }
-                is_occupied = true;
-            }
-
-            // // Validate parent IDs if provided
-            // if (parent_male_id) {
-            //     const maleResult = await DatabaseHelper.executeQuery(
-            //         'SELECT 1 FROM pigs WHERE pig_id = $1 AND farm_id = $2 AND gender = $3 AND is_deleted = 0',
-            //         [parent_male_id, farm_id, 'male']
-            //     );
-            //     if (maleResult.rows.length === 0) {
-            //         throw new ValidationError('Parent male pig not found or invalid');
-            //     }
-            // }
-            // if (parent_female_id) {
-            //     const femaleResult = await DatabaseHelper.executeQuery(
-            //         'SELECT 1 FROM pigs WHERE pig_id = $1 AND farm_id = $2 AND gender = $3 AND is_deleted = 0',
-            //         [parent_female_id, farm_id, 'female']
-            //     );
-            //     if (femaleResult.rows.length === 0) {
-            //         throw new ValidationError('Parent female pig not found or invalid');
-            //     }
-            // }
-
-            // Insert pig
-            const pigResult = await DatabaseHelper.executeQuery(
-                `INSERT INTO pigs (
-                    id, farm_id, pig_id, name, gender, breed, color, birth_date, weight, hutch_id,
+      // Insert pig
+      const pigResult = await DatabaseHelper.executeQuery(
+        `INSERT INTO pigs (
+                    id, farm_id, pig_id, name, gender, breed, color, birth_date, weight, pen_id,
                     parent_male_id, parent_female_id, acquisition_type, acquisition_date, acquisition_cost,
                     is_pregnant, pregnancy_start_date, expected_birth_date, status, notes, created_at, is_deleted
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, CURRENT_TIMESTAMP, 0)
                 RETURNING *`,
-                [
-                    uuidv4(), farm_id, pig_id, name || null, gender, breed, color, birth_date, weight,
-                    hutch_id || null, parent_male_id || null, parent_female_id || null, acquisition_type || 'birth',
-                    acquisition_date || null, acquisition_cost || null, is_pregnant || false,
-                    pregnancy_start_date || null, expected_birth_date || null, status || 'active', notes || null
-                ]
-            );
-            const pig = pigResult.rows[0];
+        [
+          uuidv4(),
+          farm_id,
+          pig_id,
+          name || null,
+          gender,
+          breed,
+          color,
+          birth_date,
+          weight,
+          pen_id || null,
+          parent_male_id || null,
+          parent_female_id || null,
+          acquisition_type || "birth",
+          acquisition_date || null,
+          acquisition_cost || null,
+          is_pregnant || false,
+          pregnancy_start_date || null,
+          expected_birth_date || null,
+          status || "active",
+          notes || null,
+        ]
+      );
+      const pig = pigResult.rows[0];
 
-            // Update hutch is_occupied
-            if (hutch_id) {
-                await DatabaseHelper.executeQuery(
-                    'UPDATE hutches SET is_occupied = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND farm_id = $3',
-                    [is_occupied, hutch_id, farm_id]
-                );
+      // Update pen is_occupied
+      if (pen_id) {
+        await DatabaseHelper.executeQuery(
+          "UPDATE pens SET is_occupied = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND farm_id = $3",
+          [is_occupied, pen_id, farm_id]
+        );
 
-                // Insert into hutch_pig_history
-                await DatabaseHelper.executeQuery(
-                    `INSERT INTO hutch_pig_history (id, hutch_id, pig_id, farm_id, assigned_at, created_at, is_deleted)
+        // Insert into pen_pig_history
+        await DatabaseHelper.executeQuery(
+          `INSERT INTO pen_pig_history (id, pen_id, pig_id, farm_id, assigned_at, created_at, is_deleted)
                     VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)`,
-                    [uuidv4(), hutch_id, pig.pig_id, farm_id]
-                );
-            }
-            logger.info(`Pig ${pig_id} created by user ${userId}`);
-            return pig;
-        } catch (error) {
-            logger.error(`Error creating pig: ${error.message}`);
-            throw error;
-        }
+          [uuidv4(), pen_id, pig.pig_id, farm_id]
+        );
+      }
+      logger.info(`Pig ${pig_id} created by user ${userId}`);
+      return pig;
+    } catch (error) {
+      logger.error(`Error creating pig: ${error.message}`);
+      throw error;
     }
+  }
 
-    static async getPigById(pigId, farmId) {
-        try {
-            const result = await DatabaseHelper.executeQuery(
-                `
-                SELECT r.*, h.id AS hutch_id, h.name AS hutch_name,
+  static async getPigById(pigId, farmId) {
+    try {
+      const result = await DatabaseHelper.executeQuery(
+        `
+                SELECT r.*, h.id AS pen_id, h.name AS pen_name,
                     (SELECT JSON_AGG(
                         JSON_BUILD_OBJECT(
-                            'hutch_id', hr.hutch_id,
+                            'pen_id', hr.pen_id,
                             'assigned_at', hr.assigned_at,
                             'removed_at', hr.removed_at,
                             'removal_reason', hr.removal_reason,
                             'removal_notes', hr.removal_notes
                         )
                     )
-                    FROM hutch_pig_history hr
-                    WHERE hr.pig_id = r.pig_id AND hr.is_deleted = 0) AS hutch_history,
+                    FROM pen_pig_history hr
+                    WHERE hr.pig_id = r.pig_id AND hr.is_deleted = 0) AS pen_history,
                     (SELECT JSON_AGG(
                         JSON_BUILD_OBJECT(
                             'birth_date', rbh.birth_date,
-                            'number_of_kits', rbh.number_of_kits,
+                            'number_of_piglets', rbh.number_of_piglets,
                             'breeding_record_id', rbh.breeding_record_id,
                             'notes', rbh.notes,
-                            'kits', (
+                            'piglets', (
                                 SELECT JSON_AGG(
                                     JSON_BUILD_OBJECT(
                                         'id', kr.id,
-                                        'kit_number', kr.kit_number,
+                                        'piglet_number', kr.piglet_number,
                                         'birth_weight', kr.birth_weight,
                                         'gender', kr.gender,
                                         'color', kr.color,
                                         'status', kr.status
                                     )
                                 )
-                                FROM kit_records kr
+                                FROM piglet_records kr
                                 WHERE kr.breeding_record_id = rbh.breeding_record_id AND kr.is_deleted = 0
                             )
                         )
@@ -167,265 +207,339 @@ class PigsService {
                         'isActive', fs.is_active
                     ) FROM feeding_schedules fs WHERE fs.pig_id = r.pig_id AND fs.is_deleted = 0 LIMIT 1) AS feedingSchedule
                 FROM pigs r
-                LEFT JOIN hutches h ON r.hutch_id = h.id AND r.farm_id = h.farm_id
+                LEFT JOIN pens h ON r.pen_id = h.id AND r.farm_id = h.farm_id
                 WHERE r.pig_id = $1 AND r.farm_id = $2 AND r.is_deleted = 0
                 `,
-                [pigId, farmId]
-            );
-            if (result.rows.length === 0) {
-                throw new ValidationError('Pig not found');
-            }
-            return result.rows[0];
-        } catch (error) {
-            logger.error(`Error fetching pig ${pigId}: ${error.message}`);
-            throw error;
-        }
+        [pigId, farmId]
+      );
+      if (result.rows.length === 0) {
+        throw new ValidationError("Pig not found");
+      }
+      return result.rows[0];
+    } catch (error) {
+      logger.error(`Error fetching pig ${pigId}: ${error.message}`);
+      throw error;
     }
+  }
 
-    static async getAllPigs(farmId, hutchId) {
-        try {
-            const queryWithHutchId = `SELECT rb.*, ht.name AS hutch_name FROM pigs rb
-                INNER JOIN hutches ht ON ht.id = rb.hutch_id
-                WHERE rb.farm_id = $1 AND rb.hutch_id = $2 AND rb.is_deleted = 0 ORDER BY rb.created_at DESC`;
-            const queryWithNoHutchId = `SELECT rb.*, ht.name AS hutch_name FROM pigs rb
-            INNER JOIN hutches ht ON ht.id = rb.hutch_id
+  static async getAllPigs(farmId, penId) {
+    try {
+      const queryWithPenId = `SELECT rb.*, ht.name AS pen_name FROM pigs rb
+                INNER JOIN pens ht ON ht.id = rb.pen_id
+                WHERE rb.farm_id = $1 AND rb.pen_id = $2 AND rb.is_deleted = 0 ORDER BY rb.created_at DESC`;
+      const queryWithNoPenId = `SELECT rb.*, ht.name AS pen_name FROM pigs rb
+            INNER JOIN pens ht ON ht.id = rb.pen_id
             WHERE rb.farm_id = $1 AND rb.is_deleted = 0 ORDER BY rb.created_at DESC`;
-            const query = hutchId ? queryWithHutchId : queryWithNoHutchId;
-            const params = hutchId ? [farmId, hutchId] : [farmId];
-            const result = await DatabaseHelper.executeQuery(query, params);
-            return result.rows;
-        } catch (error) {
-            logger.error(`Error fetching pigs for farm ${farmId}: ${error.message}`);
-            throw error;
-        }
+      const query = penId ? queryWithPenId : queryWithNoPenId;
+      const params = penId ? [farmId, penId] : [farmId];
+      const result = await DatabaseHelper.executeQuery(query, params);
+      return result.rows;
+    } catch (error) {
+      logger.error(`Error fetching pigs for farm ${farmId}: ${error.message}`);
+      throw error;
     }
+  }
 
-    static async updatePig(pigId, farmId, pigData, userId) {
-        const {
-            name, gender, breed, color, birth_date, weight,
-            parent_male_id, parent_female_id, acquisition_type, acquisition_date, acquisition_cost,
-            is_pregnant, pregnancy_start_date, expected_birth_date, status, notes
-        } = pigData;
+  static async updatePig(pigId, farmId, pigData, userId) {
+    const {
+      name,
+      gender,
+      breed,
+      color,
+      birth_date,
+      weight,
+      parent_male_id,
+      parent_female_id,
+      acquisition_type,
+      acquisition_date,
+      acquisition_cost,
+      is_pregnant,
+      pregnancy_start_date,
+      expected_birth_date,
+      status,
+      notes,
+    } = pigData;
 
-        try {
+    try {
+      // Get pen_id the pig is placed on
+      const penDetails = await DatabaseHelper.executeQuery(
+        `SELECT pen_id FROM pigs WHERE pig_id = $1`,
+        [pigId]
+      );
+      const pen_id = penDetails?.rows[0]?.pen_id;
+      // Validate pen
+      let is_occupied = false;
+      if (pen_id) {
+        const penResult = await DatabaseHelper.executeQuery(
+          "SELECT 1 FROM pens WHERE id = $1 AND farm_id = $2 AND is_deleted = 0",
+          [pen_id, farmId]
+        );
+        if (penResult.rows.length === 0) {
+          throw new ValidationError("Pen not found");
+        }
+        // Check pig count to enforce max 6 pigs per pen
+        const pigCount = await DatabaseHelper.executeQuery(
+          "SELECT COUNT(*) FROM pigs WHERE pen_id = $1 AND farm_id = $2 AND is_deleted = 0 AND pig_id != $3",
+          [pen_id, farmId, pigId]
+        );
+        if (parseInt(pigCount.rows[0].count) >= 6) {
+          throw new ValidationError("Pen cannot have more than 6 pigs");
+        }
+        is_occupied = true;
+      }
 
-            // Get hutch_id the pig is placed on
-            const hutchDetails = await DatabaseHelper.executeQuery(
-                `SELECT hutch_id FROM pigs WHERE pig_id = $1`, [pigId]
-            )
-            const hutch_id = hutchDetails?.rows[0]?.hutch_id;
-            // Validate hutch
-            let is_occupied = false;
-            if (hutch_id) {
-                const hutchResult = await DatabaseHelper.executeQuery(
-                    'SELECT 1 FROM hutches WHERE id = $1 AND farm_id = $2 AND is_deleted = 0',
-                    [hutch_id, farmId]
-                );
-                if (hutchResult.rows.length === 0) {
-                    throw new ValidationError('Hutch not found');
-                }
-                // Check pig count to enforce max 6 pigs per hutch
-                const pigCount = await DatabaseHelper.executeQuery(
-                    'SELECT COUNT(*) FROM pigs WHERE hutch_id = $1 AND farm_id = $2 AND is_deleted = 0 AND pig_id != $3',
-                    [hutch_id, farmId, pigId]
-                );
-                if (parseInt(pigCount.rows[0].count) >= 6) {
-                    throw new ValidationError('Hutch cannot have more than 6 pigs');
-                }
-                is_occupied = true;
-            }
+      // // Validate parent IDs if provided
+      // if (parent_male_id) {
+      //     const maleResult = await DatabaseHelper.executeQuery(
+      //         'SELECT 1 FROM pigs WHERE pig_id = $1 AND farm_id = $2 AND gender = $3 AND is_deleted = 0',
+      //         [parent_male_id, farmId, 'male']
+      //     );
+      //     if (maleResult.rows.length === 0) {
+      //         throw new ValidationError('Parent male pig not found or invalid');
+      //     }
+      // }
+      // if (parent_female_id) {
+      //     const femaleResult = await DatabaseHelper.executeQuery(
+      //         'SELECT 1 FROM pigs WHERE pig_id = $1 AND farm_id = $2 AND gender = $3 AND is_deleted = 0',
+      //         [parent_female_id, farmId, 'female']
+      //     );
+      //     if (femaleResult.rows.length === 0) {
+      //         throw new ValidationError('Parent female pig not found or invalid');
+      //     }
+      // }
 
-            // // Validate parent IDs if provided
-            // if (parent_male_id) {
-            //     const maleResult = await DatabaseHelper.executeQuery(
-            //         'SELECT 1 FROM pigs WHERE pig_id = $1 AND farm_id = $2 AND gender = $3 AND is_deleted = 0',
-            //         [parent_male_id, farmId, 'male']
-            //     );
-            //     if (maleResult.rows.length === 0) {
-            //         throw new ValidationError('Parent male pig not found or invalid');
-            //     }
-            // }
-            // if (parent_female_id) {
-            //     const femaleResult = await DatabaseHelper.executeQuery(
-            //         'SELECT 1 FROM pigs WHERE pig_id = $1 AND farm_id = $2 AND gender = $3 AND is_deleted = 0',
-            //         [parent_female_id, farmId, 'female']
-            //     );
-            //     if (femaleResult.rows.length === 0) {
-            //         throw new ValidationError('Parent female pig not found or invalid');
-            //     }
-            // }
+      // Get current pig
+      const currentPig = await DatabaseHelper.executeQuery(
+        "SELECT * FROM pigs WHERE pig_id = $1 AND farm_id = $2 AND is_deleted = 0",
+        [pigId, farmId]
+      );
+      if (currentPig.rows.length === 0) {
+        throw new ValidationError("Pig not found");
+      }
+      const pig = currentPig.rows[0];
 
-            // Get current pig
-            const currentPig = await DatabaseHelper.executeQuery(
-                'SELECT * FROM pigs WHERE pig_id = $1 AND farm_id = $2 AND is_deleted = 0',
-                [pigId, farmId]
-            );
-            if (currentPig.rows.length === 0) {
-                throw new ValidationError('Pig not found');
-            }
-            const pig = currentPig.rows[0];
-
-            // Update pig
-            const result = await DatabaseHelper.executeQuery(
-                `UPDATE pigs
-                SET name = $1, gender = $2, breed = $3, color = $4, birth_date = $5, weight = $6, hutch_id = $7,
+      // Update pig
+      const result = await DatabaseHelper.executeQuery(
+        `UPDATE pigs
+                SET name = $1, gender = $2, breed = $3, color = $4, birth_date = $5, weight = $6, pen_id = $7,
                     parent_male_id = $8, parent_female_id = $9, acquisition_type = $10, acquisition_date = $11,
                     acquisition_cost = $12, is_pregnant = $13, pregnancy_start_date = $14, expected_birth_date = $15,
                     status = $16, notes = $17, updated_at = CURRENT_TIMESTAMP
                 WHERE pig_id = $18 AND farm_id = $19 AND is_deleted = 0
                 RETURNING *`,
-                [
-                    name || pig.name, gender || pig.gender, breed || pig.breed, color || pig.color,
-                    birth_date || pig.birth_date, weight || pig.weight, hutch_id || pig.hutch_id || null,
-                    parent_male_id || pig.parent_male_id, parent_female_id || pig.parent_female_id,
-                    acquisition_type || pig.acquisition_type, acquisition_date || pig.acquisition_date,
-                    acquisition_cost || pig.acquisition_cost, is_pregnant || pig.is_pregnant,
-                    pregnancy_start_date || pig.pregnancy_start_date, expected_birth_date || pig.expected_birth_date,
-                    status || pig.status, notes || pig.notes, pigId, farmId
-                ]
-            );
-            if (result.rows.length === 0) {
-                throw new ValidationError('Pig not found');
-            }
-            const updatedPig = result.rows[0];
+        [
+          name || pig.name,
+          gender || pig.gender,
+          breed || pig.breed,
+          color || pig.color,
+          birth_date || pig.birth_date,
+          weight || pig.weight,
+          pen_id || pig.pen_id || null,
+          parent_male_id || pig.parent_male_id,
+          parent_female_id || pig.parent_female_id,
+          acquisition_type || pig.acquisition_type,
+          acquisition_date || pig.acquisition_date,
+          acquisition_cost || pig.acquisition_cost,
+          is_pregnant || pig.is_pregnant,
+          pregnancy_start_date || pig.pregnancy_start_date,
+          expected_birth_date || pig.expected_birth_date,
+          status || pig.status,
+          notes || pig.notes,
+          pigId,
+          farmId,
+        ]
+      );
+      if (result.rows.length === 0) {
+        throw new ValidationError("Pig not found");
+      }
+      const updatedPig = result.rows[0];
 
-            // Removing this section because I dont think addign kits to a pig should remove the pig from the hutch.
-            logger.info(`Pig ${pigId} updated by user ${userId}`);
-            return updatedPig;
-        } catch (error) {
-            logger.error(`Error updating pig ${pigId}: ${error.message}`);
-            throw error;
-        }
+      // Removing this section because I dont think addign piglets to a pig should remove the pig from the pen.
+      logger.info(`Pig ${pigId} updated by user ${userId}`);
+      return updatedPig;
+    } catch (error) {
+      logger.error(`Error updating pig ${pigId}: ${error.message}`);
+      throw error;
+    }
+  }
+
+  static async deletePig(pigId, farmId, removalData, userId) {
+    const {
+      reason,
+      notes,
+      date,
+      sale_amount,
+      sale_weight,
+      sold_to,
+      sale_notes,
+      sale_type,
+      pen_id,
+      currency,
+    } = removalData;
+    if (!reason) {
+      throw new ValidationError("Removal reason is required");
     }
 
-    static async deletePig(pigId, farmId, removalData, userId) {
-        const { reason, notes, date, sale_amount, sale_weight, sold_to, sale_notes, sale_type, hutch_id, currency } = removalData;
-        if (!reason) {
-            throw new ValidationError('Removal reason is required');
-        }
+    try {
+      const pigResult = await DatabaseHelper.executeQuery(
+        "SELECT id, pig_id, pen_id FROM pigs WHERE pig_id = $1 AND farm_id = $2 AND is_deleted = 0",
+        [pigId, farmId]
+      );
+      if (pigResult.rows.length === 0) {
+        throw new ValidationError("Pig not found");
+      }
+      const pig = pigResult.rows[0];
 
-        try {
-            const pigResult = await DatabaseHelper.executeQuery(
-                'SELECT id, pig_id, hutch_id FROM pigs WHERE pig_id = $1 AND farm_id = $2 AND is_deleted = 0',
-                [pigId, farmId]
-            );
-            if (pigResult.rows.length === 0) {
-                throw new ValidationError('Pig not found');
-            }
-            const pig = pigResult.rows[0];
+      // Soft delete pig
+      const result = await DatabaseHelper.executeQuery(
+        "UPDATE pigs SET is_deleted = 1, updated_at = CURRENT_TIMESTAMP WHERE pig_id = $1 AND farm_id = $2 AND is_deleted = 0 RETURNING *",
+        [pigId, farmId]
+      );
+      const deletedPig = result.rows[0];
 
-            // Soft delete pig
-            const result = await DatabaseHelper.executeQuery(
-                'UPDATE pigs SET is_deleted = 1, updated_at = CURRENT_TIMESTAMP WHERE pig_id = $1 AND farm_id = $2 AND is_deleted = 0 RETURNING *',
-                [pigId, farmId]
-            );
-            const deletedPig = result.rows[0];
-
-            // Insert removal record
-            await DatabaseHelper.executeQuery(
-                `INSERT INTO removal_records (
-                    id, pig_id, hutch_id, farm_id, reason, notes, date, sale_amount, sale_weight, sold_to, created_at, is_deleted
+      // Insert removal record
+      await DatabaseHelper.executeQuery(
+        `INSERT INTO removal_records (
+                    id, pig_id, pen_id, farm_id, reason, notes, date, sale_amount, sale_weight, sold_to, created_at, is_deleted
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP, 0)`,
-                [
-                    uuidv4(), pig.pig_id, hutch_id || pig.hutch_id || null, farmId, reason,
-                    notes || null, date || new Date().toISOString().split('T')[0], sale_amount || null,
-                    sale_weight || null, sold_to || null
-                ]
-            );
+        [
+          uuidv4(),
+          pig.pig_id,
+          pen_id || pig.pen_id || null,
+          farmId,
+          reason,
+          notes || null,
+          date || new Date().toISOString().split("T")[0],
+          sale_amount || null,
+          sale_weight || null,
+          sold_to || null,
+        ]
+      );
 
-            // Update hutch_pig_history
-            if (pig.hutch_id) {
-                await DatabaseHelper.executeQuery(
-                    `UPDATE hutch_pig_history
+      // Update pen_pig_history
+      if (pig.pen_id) {
+        await DatabaseHelper.executeQuery(
+          `UPDATE pen_pig_history
                     SET removed_at = CURRENT_TIMESTAMP, removal_reason = $1, removal_notes = $2,
                         sale_amount = $3, sale_date = $4, sale_weight = $5, sold_to = $6, updated_at = CURRENT_TIMESTAMP
-                    WHERE hutch_id = $7 AND pig_id = $8 AND farm_id = $9 AND is_deleted = 0 AND removed_at IS NULL`,
-                    [
-                        reason, sale_notes || notes || null, sale_amount || null,
-                        date || new Date().toISOString().split('T')[0], sale_weight || null, sold_to || null,
-                        pig.hutch_id, pig.pig_id, farmId
-                    ]
-                );
+                    WHERE pen_id = $7 AND pig_id = $8 AND farm_id = $9 AND is_deleted = 0 AND removed_at IS NULL`,
+          [
+            reason,
+            sale_notes || notes || null,
+            sale_amount || null,
+            date || new Date().toISOString().split("T")[0],
+            sale_weight || null,
+            sold_to || null,
+            pig.pen_id,
+            pig.pig_id,
+            farmId,
+          ]
+        );
 
-                // Update hutch is_occupied
-                const pigCount = await DatabaseHelper.executeQuery(
-                    'SELECT COUNT(*) FROM pigs WHERE hutch_id = $1 AND farm_id = $2 AND is_deleted = 0',
-                    [pig.hutch_id, farmId]
-                );
-                if (parseInt(pigCount.rows[0].count) === 0) {
-                    await DatabaseHelper.executeQuery(
-                        'UPDATE hutches SET is_occupied = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND farm_id = $2',
-                        [pig.hutch_id, farmId]
-                    );
-                }
-            }
-            logger.info(`Pig ${pigId} soft deleted by user ${userId}`);
-            return deletedPig;
-        } catch (error) {
-            logger.error(`Error deleting pig ${pigId}: ${error.message}`);
-            throw error;
+        // Update pen is_occupied
+        const pigCount = await DatabaseHelper.executeQuery(
+          "SELECT COUNT(*) FROM pigs WHERE pen_id = $1 AND farm_id = $2 AND is_deleted = 0",
+          [pig.pen_id, farmId]
+        );
+        if (parseInt(pigCount.rows[0].count) === 0) {
+          await DatabaseHelper.executeQuery(
+            "UPDATE pens SET is_occupied = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND farm_id = $2",
+            [pig.pen_id, farmId]
+          );
         }
+      }
+      logger.info(`Pig ${pigId} soft deleted by user ${userId}`);
+      return deletedPig;
+    } catch (error) {
+      logger.error(`Error deleting pig ${pigId}: ${error.message}`);
+      throw error;
     }
+  }
 
-    static async getAllPigDetails(farmId, options = {}) {
-        try {
-            const { page = 1, limit = 10, sortField = "created_at", sortOrder = "desc", searchTerm = null, filters = {} } = options
-            const offset = (page - 1) * limit
-            const allowedSortFields = ["name", "gender", "breed", "created_at", "updated_at", "birth_date", "weight", "color", "hutch_name"];
-            const validSortField = allowedSortFields.includes(sortField) ? sortField : "created_at";
-            const validSortOrder = ["asc", "desc"].includes(sortOrder.toLowerCase()) ? sortOrder.toUpperCase() : "DESC";
+  static async getAllPigDetails(farmId, options = {}) {
+    try {
+      const {
+        page = 1,
+        limit = 10,
+        sortField = "created_at",
+        sortOrder = "desc",
+        searchTerm = null,
+        filters = {},
+      } = options;
+      const offset = (page - 1) * limit;
+      const allowedSortFields = [
+        "name",
+        "gender",
+        "breed",
+        "created_at",
+        "updated_at",
+        "birth_date",
+        "weight",
+        "color",
+        "pen_name",
+      ];
+      const validSortField = allowedSortFields.includes(sortField)
+        ? sortField
+        : "created_at";
+      const validSortOrder = ["asc", "desc"].includes(sortOrder.toLowerCase())
+        ? sortOrder.toUpperCase()
+        : "DESC";
 
-            // Base where clause for farm
-            const baseWhereClause = "WHERE r.farm_id = $1 AND r.is_deleted = 0";
-            const baseParams = [farmId];
+      // Base where clause for farm
+      const baseWhereClause = "WHERE r.farm_id = $1 AND r.is_deleted = 0";
+      const baseParams = [farmId];
 
-            // Build filter conditions for search/filters (for paginated data only)
-            let filteredWhereClause = baseWhereClause;
-            const filteredParams = [...baseParams];
-            let paramIndex = 2;
-            if (searchTerm && searchTerm.trim()) {
-                filteredWhereClause += ` AND (
+      // Build filter conditions for search/filters (for paginated data only)
+      let filteredWhereClause = baseWhereClause;
+      const filteredParams = [...baseParams];
+      let paramIndex = 2;
+      if (searchTerm && searchTerm.trim()) {
+        filteredWhereClause += ` AND (
                 LOWER(r.name) LIKE $${paramIndex} OR
                 LOWER(r.breed) LIKE $${paramIndex} OR
                 LOWER(r.pig_id) LIKE $${paramIndex} OR
                 LOWER(r.gender) LIKE $${paramIndex} OR
                 LOWER(r.color) LIKE $${paramIndex}
-            )`
-                filteredParams.push(`%${searchTerm.trim().toLowerCase()}%`);
-                paramIndex++;
-            }
+            )`;
+        filteredParams.push(`%${searchTerm.trim().toLowerCase()}%`);
+        paramIndex++;
+      }
 
-            // Apply additional filters if provided
-            if (filters.gender && filters.gender.length > 0) {
-                const genderPlaceholders = filters.gender.map(() => `$${paramIndex++}`).join(",")
-                filteredWhereClause += ` AND r.gender IN (${genderPlaceholders})`
-                filteredParams.push(...filters.gender)
-            }
+      // Apply additional filters if provided
+      if (filters.gender && filters.gender.length > 0) {
+        const genderPlaceholders = filters.gender
+          .map(() => `$${paramIndex++}`)
+          .join(",");
+        filteredWhereClause += ` AND r.gender IN (${genderPlaceholders})`;
+        filteredParams.push(...filters.gender);
+      }
 
-            if (filters.breed && filters.breed.length > 0) {
-                const breedPlaceholders = filters.breed.map(() => `$${paramIndex++}`).join(",")
-                filteredWhereClause += ` AND r.breed IN (${breedPlaceholders})`
-                filteredParams.push(...filters.breed)
-            }
+      if (filters.breed && filters.breed.length > 0) {
+        const breedPlaceholders = filters.breed
+          .map(() => `$${paramIndex++}`)
+          .join(",");
+        filteredWhereClause += ` AND r.breed IN (${breedPlaceholders})`;
+        filteredParams.push(...filters.breed);
+      }
 
-            if (filters.isPregnant !== undefined) {
-                filteredWhereClause += ` AND r.is_pregnant = $${paramIndex}`
-                filteredParams.push(filters.isPregnant)
-                paramIndex++
-            }
+      if (filters.isPregnant !== undefined) {
+        filteredWhereClause += ` AND r.is_pregnant = $${paramIndex}`;
+        filteredParams.push(filters.isPregnant);
+        paramIndex++;
+      }
 
-            if (filters.ageRange && filters.ageRange !== 'all') {
-                if (filters.ageRange === 'young') {
-                    filteredWhereClause += ` AND r.birth_date > NOW() - INTERVAL '6 MONTHS'`;
-                } else if (filters.ageRange === 'adult') {
-                    filteredWhereClause += ` AND r.birth_date <= NOW() - INTERVAL '6 MONTHS' AND r.birth_date > NOW() - INTERVAL '24 MONTHS'`;
-                } else if (filters.ageRange === 'senior') {
-                    filteredWhereClause += ` AND r.birth_date <= NOW() - INTERVAL '24 MONTHS'`;
-                }
-            }
+      if (filters.ageRange && filters.ageRange !== "all") {
+        if (filters.ageRange === "young") {
+          filteredWhereClause += ` AND r.birth_date > NOW() - INTERVAL '6 MONTHS'`;
+        } else if (filters.ageRange === "adult") {
+          filteredWhereClause += ` AND r.birth_date <= NOW() - INTERVAL '6 MONTHS' AND r.birth_date > NOW() - INTERVAL '24 MONTHS'`;
+        } else if (filters.ageRange === "senior") {
+          filteredWhereClause += ` AND r.birth_date <= NOW() - INTERVAL '24 MONTHS'`;
+        }
+      }
 
-            // Get overall farm statistics (unfiltered)
-            const statsQuery = `
+      // Get overall farm statistics (unfiltered)
+      const statsQuery = `
             SELECT 
                 COUNT(*) as total_pigs,
                 COUNT(CASE WHEN r.gender = 'male' THEN 1 END) as male_count,
@@ -443,71 +557,77 @@ class PigsService {
                 ) as breed_gender_data
             FROM pigs r
             ${baseWhereClause}
-        `
+        `;
 
-            const statsResult = await DatabaseHelper.executeQuery(statsQuery, baseParams);
-            const stats = statsResult.rows[0];
+      const statsResult = await DatabaseHelper.executeQuery(
+        statsQuery,
+        baseParams
+      );
+      const stats = statsResult.rows[0];
 
-            // Process breed distribution
-            const breedDistribution = {};
-            if (stats.breed_gender_data) {
-                stats.breed_gender_data.forEach((item) => {
-                    const breed = item.breed || "Unknown";
-                    if (!breedDistribution[breed]) {
-                        breedDistribution[breed] = { males: 0, females: 0, total: 0 };
-                    }
-                    if (item.gender === "male") {
-                        breedDistribution[breed].males++;
-                    } else if (item.gender === "female") {
-                        breedDistribution[breed].females++;
-                    }
-                    breedDistribution[breed].total++;
-                })
-            }
+      // Process breed distribution
+      const breedDistribution = {};
+      if (stats.breed_gender_data) {
+        stats.breed_gender_data.forEach(item => {
+          const breed = item.breed || "Unknown";
+          if (!breedDistribution[breed]) {
+            breedDistribution[breed] = { males: 0, females: 0, total: 0 };
+          }
+          if (item.gender === "male") {
+            breedDistribution[breed].males++;
+          } else if (item.gender === "female") {
+            breedDistribution[breed].females++;
+          }
+          breedDistribution[breed].total++;
+        });
+      }
 
-            // Get filtered count for pagination
-            const countQuery = `
+      // Get filtered count for pagination
+      const countQuery = `
             SELECT COUNT(*) as total
             FROM pigs r
-            LEFT JOIN hutches h ON r.hutch_id = h.id AND r.farm_id = h.farm_id
+            LEFT JOIN pens h ON r.pen_id = h.id AND r.farm_id = h.farm_id
             ${filteredWhereClause}
-        `
+        `;
 
-            const countResult = await DatabaseHelper.executeQuery(countQuery, filteredParams);
-            const filteredTotalItems = Number.parseInt(countResult.rows[0].total);
+      const countResult = await DatabaseHelper.executeQuery(
+        countQuery,
+        filteredParams
+      );
+      const filteredTotalItems = Number.parseInt(countResult.rows[0].total);
 
-            // Get paginated data with filters applied
-            const mainQuery = `
-            SELECT r.*, h.id AS hutch_id, h.name AS hutch_name,
+      // Get paginated data with filters applied
+      const mainQuery = `
+            SELECT r.*, h.id AS pen_id, h.name AS pen_name,
                 (SELECT JSON_AGG(
                     JSON_BUILD_OBJECT(
-                        'hutch_id', hr.hutch_id,
+                        'pen_id', hr.pen_id,
                         'assigned_at', hr.assigned_at,
                         'removed_at', hr.removed_at,
                         'removal_reason', hr.removal_reason,
                         'removal_notes', hr.removal_notes
                     )
                 )
-                FROM hutch_pig_history hr
-                    WHERE hr.pig_id = r.pig_id AND hr.is_deleted = 0) AS hutch_history,
+                FROM pen_pig_history hr
+                    WHERE hr.pig_id = r.pig_id AND hr.is_deleted = 0) AS pen_history,
                 (SELECT JSON_AGG(
                     JSON_BUILD_OBJECT(
                         'birth_date', rbh.birth_date,
-                        'number_of_kits', rbh.number_of_kits,
+                        'number_of_piglets', rbh.number_of_piglets,
                         'breeding_record_id', rbh.breeding_record_id,
                         'notes', rbh.notes,
-                        'kits', (
+                        'piglets', (
                             SELECT JSON_AGG(
                                 JSON_BUILD_OBJECT(
                                     'id', kr.id,
-                                    'kit_number', kr.kit_number,
+                                    'piglet_number', kr.piglet_number,
                                     'birth_weight', kr.birth_weight,
                                     'gender', kr.gender,
                                     'color', kr.color,
                                     'status', kr.status
                                 )
                             )
-                            FROM kit_records kr
+                            FROM piglet_records kr
                             WHERE kr.breeding_record_id = rbh.breeding_record_id AND kr.is_deleted = 0
                         )
                     )
@@ -537,39 +657,46 @@ class PigsService {
                         'isActive', fs.is_active
                     ) FROM feeding_schedules fs WHERE fs.pig_id = r.pig_id AND fs.is_deleted = 0 LIMIT 1) AS feedingSchedule
             FROM pigs r
-            LEFT JOIN hutches h ON r.hutch_id = h.id AND r.farm_id = h.farm_id
+            LEFT JOIN pens h ON r.pen_id = h.id AND r.farm_id = h.farm_id
             ${filteredWhereClause}
-            ORDER BY ${validSortField === "hutch_name" ? "h.name" : "r." + validSortField} ${validSortOrder}
+            ORDER BY ${
+              validSortField === "pen_name" ? "h.name" : "r." + validSortField
+            } ${validSortOrder}
             LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
-        `
+        `;
 
-            filteredParams.push(limit, offset);
-            const result = await DatabaseHelper.executeQuery(mainQuery, filteredParams);
+      filteredParams.push(limit, offset);
+      const result = await DatabaseHelper.executeQuery(
+        mainQuery,
+        filteredParams
+      );
 
-            return {
-                data: result.rows,
-                pagination: {
-                    currentPage: page,
-                    totalItems: filteredTotalItems,
-                    totalPages: Math.ceil(filteredTotalItems / limit),
-                    pageSize: limit,
-                    hasNextPage: page < Math.ceil(filteredTotalItems / limit),
-                    hasPreviousPage: page > 1,
-                },
-                statistics: {
-                    totalPigs: Number.parseInt(stats.total_pigs),
-                    maleCount: Number.parseInt(stats.male_count),
-                    femaleCount: Number.parseInt(stats.female_count),
-                    pregnantCount: Number.parseInt(stats.pregnant_count),
-                    breederBoarCount: Number.parseInt(stats.breeder_boar_count),
-                    breedDistribution: breedDistribution,
-                },
-            }
-        } catch (error) {
-            logger.error(`Error fetching paginated pig details for farm ${farmId}: ${error.message}`)
-            throw error;
-        }
+      return {
+        data: result.rows,
+        pagination: {
+          currentPage: page,
+          totalItems: filteredTotalItems,
+          totalPages: Math.ceil(filteredTotalItems / limit),
+          pageSize: limit,
+          hasNextPage: page < Math.ceil(filteredTotalItems / limit),
+          hasPreviousPage: page > 1,
+        },
+        statistics: {
+          totalPigs: Number.parseInt(stats.total_pigs),
+          maleCount: Number.parseInt(stats.male_count),
+          femaleCount: Number.parseInt(stats.female_count),
+          pregnantCount: Number.parseInt(stats.pregnant_count),
+          breederBoarCount: Number.parseInt(stats.breeder_boar_count),
+          breedDistribution: breedDistribution,
+        },
+      };
+    } catch (error) {
+      logger.error(
+        `Error fetching paginated pig details for farm ${farmId}: ${error.message}`
+      );
+      throw error;
     }
+  }
 }
 
 export default PigsService;

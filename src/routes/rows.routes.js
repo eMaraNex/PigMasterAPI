@@ -1,9 +1,13 @@
-import express from 'express';
-import RowsController from '../controllers/rows.controllers.js';
-import { validateRequest } from '../middleware/validateRequest.js';
-import { rowSchema, rowUpdateSchema, rowExpandSchema } from '../utils/validator.js';
-import authMiddleware from '../middleware/auth.middleware.js';
-import { requireActiveSubscription } from '../middleware/subscription.middleware.js';
+import express from "express";
+import RowsController from "../controllers/rows.controllers.js";
+import { validateRequest } from "../middleware/validateRequest.js";
+import {
+  rowSchema,
+  rowUpdateSchema,
+  rowExpandSchema,
+} from "../utils/validator.js";
+import authMiddleware from "../middleware/auth.middleware.js";
+import { requireActiveSubscription } from "../middleware/subscription.middleware.js";
 
 const router = express.Router();
 const enforceActivePlan = requireActiveSubscription();
@@ -32,10 +36,10 @@ const enforceActivePlan = requireActiveSubscription();
  *           nullable: true
  *         capacity:
  *           type: integer
- *           description: Maximum number of hutches in the row
+ *           description: Maximum number of pens in the row
  *         occupied:
  *           type: integer
- *           description: Number of occupied hutches
+ *           description: Number of occupied pens
  *         is_deleted:
  *           type: integer
  *           enum: [0, 1]
@@ -73,7 +77,7 @@ const enforceActivePlan = requireActiveSubscription();
  *           description: The ID of the farm
  *         additionalCapacity:
  *           type: integer
- *           description: Number of additional hutches to add to the row's capacity
+ *           description: Number of additional pens to add to the row's capacity
  *           minimum: 1
  *       example:
  *         name: Venus
@@ -123,7 +127,12 @@ const enforceActivePlan = requireActiveSubscription();
  *       401:
  *         description: Unauthorized
  */
-router.post('/create/:farmId', authMiddleware, enforceActivePlan, RowsController.createRow);
+router.post(
+  "/create/:farmId",
+  authMiddleware,
+  enforceActivePlan,
+  RowsController.createRow
+);
 
 /**
  * @swagger
@@ -162,7 +171,12 @@ router.post('/create/:farmId', authMiddleware, enforceActivePlan, RowsController
  *       401:
  *         description: Unauthorized
  */
-router.get('/list/:farmId', authMiddleware, enforceActivePlan, RowsController.getAllRows);
+router.get(
+  "/list/:farmId",
+  authMiddleware,
+  enforceActivePlan,
+  RowsController.getAllRows
+);
 
 /**
  * @swagger
@@ -207,7 +221,12 @@ router.get('/list/:farmId', authMiddleware, enforceActivePlan, RowsController.ge
  *       401:
  *         description: Unauthorized
  */
-router.get('/list/:farmId/:rowId', authMiddleware, enforceActivePlan, RowsController.getRowByName);
+router.get(
+  "/list/:farmId/:rowId",
+  authMiddleware,
+  enforceActivePlan,
+  RowsController.getRowByName
+);
 
 /**
  * @swagger
@@ -267,7 +286,12 @@ router.get('/list/:farmId/:rowId', authMiddleware, enforceActivePlan, RowsContro
  *       401:
  *         description: Unauthorized
  */
-router.put('/update/:farmId/:rowId', authMiddleware, enforceActivePlan, RowsController.updateRow);
+router.put(
+  "/update/:farmId/:rowId",
+  authMiddleware,
+  enforceActivePlan,
+  RowsController.updateRow
+);
 
 /**
  * @swagger
@@ -312,7 +336,12 @@ router.put('/update/:farmId/:rowId', authMiddleware, enforceActivePlan, RowsCont
  *       401:
  *         description: Unauthorized
  */
-router.delete('/delete/:farmId/:rowId', authMiddleware, enforceActivePlan, RowsController.deleteRow);
+router.delete(
+  "/delete/:farmId/:rowId",
+  authMiddleware,
+  enforceActivePlan,
+  RowsController.deleteRow
+);
 
 /**
  * @swagger
@@ -352,7 +381,11 @@ router.delete('/delete/:farmId/:rowId', authMiddleware, enforceActivePlan, RowsC
  *         description: Unauthorized
  */
 // router.post('/expand', authMiddleware, enforceActivePlan, validateRequest(rowExpandSchema), RowsController.expandRowCapacity);
-router.post('/expand', authMiddleware, enforceActivePlan, RowsController.expandRowCapacity);
-
+router.post(
+  "/expand",
+  authMiddleware,
+  enforceActivePlan,
+  RowsController.expandRowCapacity
+);
 
 export default router;

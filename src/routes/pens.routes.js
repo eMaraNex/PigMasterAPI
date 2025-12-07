@@ -1,10 +1,10 @@
-import express from 'express';
-import HutchesController from '../controllers/hutches.controllers.js';
+import express from "express";
+import PensController from "../controllers/pens.controllers.js";
 // import authMiddleware from '../middleware/auth.js';
-import { validateRequest } from '../middleware/validateRequest.js';
-import { hutchSchema, hutchUpdateSchema } from '../utils/validator.js';
-import authMiddleware from '../middleware/auth.middleware.js';
-import { requireActiveSubscription } from '../middleware/subscription.middleware.js';
+import { validateRequest } from "../middleware/validateRequest.js";
+import { penSchema, penUpdateSchema } from "../utils/validator.js";
+import authMiddleware from "../middleware/auth.middleware.js";
+import { requireActiveSubscription } from "../middleware/subscription.middleware.js";
 
 const router = express.Router();
 const enforceActivePlan = requireActiveSubscription();
@@ -13,7 +13,7 @@ const enforceActivePlan = requireActiveSubscription();
  * @swagger
  * components:
  *   schemas:
- *     Hutch:
+ *     Pen:
  *       type: object
  *       required:
  *         - id
@@ -25,44 +25,44 @@ const enforceActivePlan = requireActiveSubscription();
  *       properties:
  *         id:
  *           type: string
- *           description: The unique ID of the hutch (e.g., Mercury-A1)
+ *           description: The unique ID of the pen (e.g., Mercury-A1)
  *         farm_id:
  *           type: string
  *           format: uuid
- *           description: The ID of the farm this hutch belongs to
+ *           description: The ID of the farm this pen belongs to
  *         row_id:
  *           type: string
  *           format: uuid
- *           description: The ID of the row this hutch belongs to (optional for standalone hutches)
+ *           description: The ID of the row this pen belongs to (optional for standalone pens)
  *           nullable: true
  *         row_name:
  *           type: string
- *           description: The name of the row this hutch belongs to (read-only, from JOIN)
+ *           description: The name of the row this pen belongs to (read-only, from JOIN)
  *           nullable: true
  *         level:
  *           type: string
  *           enum: [A, B, C]
- *           description: The level of the hutch
+ *           description: The level of the pen
  *         position:
  *           type: integer
- *           description: The position of the hutch in the row
+ *           description: The position of the pen in the row
  *         size:
  *           type: string
  *           enum: [small, medium, large]
- *           description: The size of the hutch
+ *           description: The size of the pen
  *         material:
  *           type: string
  *           enum: [wire, wood, plastic]
- *           description: The material of the hutch
+ *           description: The material of the pen
  *         features:
  *           type: array
  *           items:
  *             type: string
- *           description: List of features in the hutch
+ *           description: List of features in the pen
  *           nullable: true
  *         is_occupied:
  *           type: boolean
- *           description: Whether the hutch is occupied
+ *           description: Whether the pen is occupied
  *         last_cleaned:
  *           type: string
  *           format: date-time
@@ -104,10 +104,10 @@ const enforceActivePlan = requireActiveSubscription();
 
 /**
  * @swagger
- * /api/v1/hutches/{farmId}:
+ * /api/v1/pens/{farmId}:
  *   post:
- *     summary: Create a new hutch
- *     tags: [Hutches]
+ *     summary: Create a new pen
+ *     tags: [Pens]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -133,7 +133,7 @@ const enforceActivePlan = requireActiveSubscription();
  *             properties:
  *               id:
  *                 type: string
- *                 description: The unique ID of the hutch
+ *                 description: The unique ID of the pen
  *               row_id:
  *                 type: string
  *                 format: uuid
@@ -142,18 +142,18 @@ const enforceActivePlan = requireActiveSubscription();
  *               level:
  *                 type: string
  *                 enum: [A, B, C]
- *                 description: The level of the hutch
+ *                 description: The level of the pen
  *               position:
  *                 type: integer
- *                 description: The position of the hutch
+ *                 description: The position of the pen
  *               size:
  *                 type: string
  *                 enum: [small, medium, large]
- *                 description: The size of the hutch
+ *                 description: The size of the pen
  *               material:
  *                 type: string
  *                 enum: [wire, wood, plastic]
- *                 description: The material of the hutch
+ *                 description: The material of the pen
  *               features:
  *                 type: array
  *                 items:
@@ -162,7 +162,7 @@ const enforceActivePlan = requireActiveSubscription();
  *                 nullable: true
  *               is_occupied:
  *                 type: boolean
- *                 description: Whether the hutch is occupied
+ *                 description: Whether the pen is occupied
  *               last_cleaned:
  *                 type: string
  *                 format: date-time
@@ -180,7 +180,7 @@ const enforceActivePlan = requireActiveSubscription();
  *               last_cleaned: null
  *     responses:
  *       201:
- *         description: Hutch created successfully
+ *         description: Pen created successfully
  *         content:
  *           application/json:
  *             schema:
@@ -191,26 +191,30 @@ const enforceActivePlan = requireActiveSubscription();
  *                   example: true
  *                 message:
  *                   type: string
- *                   example: Hutch created successfully
+ *                   example: Pen created successfully
  *                 data:
- *                   $ref: '#/components/schemas/Hutch'
+ *                   $ref: '#/components/schemas/Pen'
  *       400:
  *         description: Invalid input
  *       409:
- *         description: Hutch already exists
+ *         description: Pen already exists
  *       401:
  *         description: Unauthorized
  */
-// router.post('/:farmId', authMiddleware, enforceActivePlan, validateRequest(hutchSchema), HutchesController.createHutch);
-router.post('/:farmId', authMiddleware, enforceActivePlan, HutchesController.createHutch);
-
+// router.post('/:farmId', authMiddleware, enforceActivePlan, validateRequest(penSchema), PensController.createPen);
+router.post(
+  "/:farmId",
+  authMiddleware,
+  enforceActivePlan,
+  PensController.createPen
+);
 
 /**
  * @swagger
- * /api/v1/hutches/{farmId}/{id}:
+ * /api/v1/pens/{farmId}/{id}:
  *   get:
- *     summary: Get a hutch by ID
- *     tags: [Hutches]
+ *     summary: Get a pen by ID
+ *     tags: [Pens]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -226,10 +230,10 @@ router.post('/:farmId', authMiddleware, enforceActivePlan, HutchesController.cre
  *         schema:
  *           type: string
  *         required: true
- *         description: The hutch ID (e.g., Mercury-A1)
+ *         description: The pen ID (e.g., Mercury-A1)
  *     responses:
  *       200:
- *         description: Hutch retrieved successfully
+ *         description: Pen retrieved successfully
  *         content:
  *           application/json:
  *             schema:
@@ -240,22 +244,27 @@ router.post('/:farmId', authMiddleware, enforceActivePlan, HutchesController.cre
  *                   example: true
  *                 message:
  *                   type: string
- *                   example: Hutch retrieved successfully
+ *                   example: Pen retrieved successfully
  *                 data:
- *                   $ref: '#/components/schemas/Hutch'
+ *                   $ref: '#/components/schemas/Pen'
  *       404:
- *         description: Hutch not found
+ *         description: Pen not found
  *       401:
  *         description: Unauthorized
  */
-router.get('/:farmId/:id', authMiddleware, enforceActivePlan, HutchesController.getHutch);
+router.get(
+  "/:farmId/:id",
+  authMiddleware,
+  enforceActivePlan,
+  PensController.getPen
+);
 
 /**
  * @swagger
- * /api/v1/hutches/{farmId}:
+ * /api/v1/pens/{farmId}:
  *   get:
- *     summary: Get all hutches for a farm
- *     tags: [Hutches]
+ *     summary: Get all pens for a farm
+ *     tags: [Pens]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -281,12 +290,12 @@ router.get('/:farmId/:id', authMiddleware, enforceActivePlan, HutchesController.
  *         name: limit
  *         schema:
  *           type: integer
- *         description: Number of hutches to return
+ *         description: Number of pens to return
  *       - in: query
  *         name: offset
  *         schema:
  *           type: integer
- *         description: Number of hutches to skip
+ *         description: Number of pens to skip
  *       - in: query
  *         name: is_occupied
  *         schema:
@@ -294,7 +303,7 @@ router.get('/:farmId/:id', authMiddleware, enforceActivePlan, HutchesController.
  *         description: Filter by occupied status
  *     responses:
  *       200:
- *         description: Hutches retrieved successfully
+ *         description: Pens retrieved successfully
  *         content:
  *           application/json:
  *             schema:
@@ -305,22 +314,27 @@ router.get('/:farmId/:id', authMiddleware, enforceActivePlan, HutchesController.
  *                   example: true
  *                 message:
  *                   type: string
- *                   example: Hutches retrieved successfully
+ *                   example: Pens retrieved successfully
  *                 data:
  *                   type: array
  *                   items:
- *                     $ref: '#/components/schemas/Hutch'
+ *                     $ref: '#/components/schemas/Pen'
  *       401:
  *         description: Unauthorized
  */
-router.get('/:farmId', authMiddleware, enforceActivePlan, HutchesController.getAllHutches);
+router.get(
+  "/:farmId",
+  authMiddleware,
+  enforceActivePlan,
+  PensController.getAllPens
+);
 
 /**
  * @swagger
- * /api/v1/hutches/{farmId}/{id}:
+ * /api/v1/pens/{farmId}/{id}:
  *   put:
- *     summary: Update a hutch
- *     tags: [Hutches]
+ *     summary: Update a pen
+ *     tags: [Pens]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -336,7 +350,7 @@ router.get('/:farmId', authMiddleware, enforceActivePlan, HutchesController.getA
  *         schema:
  *           type: string
  *         required: true
- *         description: The hutch ID (e.g., Mercury-A1)
+ *         description: The pen ID (e.g., Mercury-A1)
  *     requestBody:
  *       required: true
  *       content:
@@ -352,18 +366,18 @@ router.get('/:farmId', authMiddleware, enforceActivePlan, HutchesController.getA
  *               level:
  *                 type: string
  *                 enum: [A, B, C]
- *                 description: The level of the hutch
+ *                 description: The level of the pen
  *               position:
  *                 type: integer
- *                 description: The position of the hutch
+ *                 description: The position of the pen
  *               size:
  *                 type: string
  *                 enum: [small, medium, large]
- *                 description: The size of the hutch
+ *                 description: The size of the pen
  *               material:
  *                 type: string
  *                 enum: [wire, wood, plastic]
- *                 description: The material of the hutch
+ *                 description: The material of the pen
  *               features:
  *                 type: array
  *                 items:
@@ -372,7 +386,7 @@ router.get('/:farmId', authMiddleware, enforceActivePlan, HutchesController.getA
  *                 nullable: true
  *               is_occupied:
  *                 type: boolean
- *                 description: Whether the hutch is occupied
+ *                 description: Whether the pen is occupied
  *               last_cleaned:
  *                 type: string
  *                 format: date-time
@@ -389,7 +403,7 @@ router.get('/:farmId', authMiddleware, enforceActivePlan, HutchesController.getA
  *               last_cleaned: null
  *     responses:
  *       200:
- *         description: Hutch updated successfully
+ *         description: Pen updated successfully
  *         content:
  *           application/json:
  *             schema:
@@ -400,24 +414,30 @@ router.get('/:farmId', authMiddleware, enforceActivePlan, HutchesController.getA
  *                   example: true
  *                 message:
  *                   type: string
- *                   example: Hutch updated successfully
+ *                   example: Pen updated successfully
  *                 data:
- *                   $ref: '#/components/schemas/Hutch'
+ *                   $ref: '#/components/schemas/Pen'
  *       400:
  *         description: Invalid input
  *       404:
- *         description: Hutch not found
+ *         description: Pen not found
  *       401:
  *         description: Unauthorized
  */
-router.put('/:farmId/:id', authMiddleware, enforceActivePlan, validateRequest(hutchUpdateSchema), HutchesController.updateHutch);
+router.put(
+  "/:farmId/:id",
+  authMiddleware,
+  enforceActivePlan,
+  validateRequest(penUpdateSchema),
+  PensController.updatePen
+);
 
 /**
  * @swagger
- * /api/v1/hutches/{farmId}/{id}:
+ * /api/v1/pens/{farmId}/{id}:
  *   delete:
- *     summary: Soft delete a hutch
- *     tags: [Hutches]
+ *     summary: Soft delete a pen
+ *     tags: [Pens]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -433,10 +453,10 @@ router.put('/:farmId/:id', authMiddleware, enforceActivePlan, validateRequest(hu
  *         schema:
  *           type: string
  *         required: true
- *         description: The hutch ID (e.g., Mercury-A1)
+ *         description: The pen ID (e.g., Mercury-A1)
  *     responses:
  *       200:
- *         description: Hutch soft deleted successfully
+ *         description: Pen soft deleted successfully
  *         content:
  *           application/json:
  *             schema:
@@ -447,22 +467,27 @@ router.put('/:farmId/:id', authMiddleware, enforceActivePlan, validateRequest(hu
  *                   example: true
  *                 message:
  *                   type: string
- *                   example: Hutch soft deleted successfully
+ *                   example: Pen soft deleted successfully
  *                 data:
- *                   $ref: '#/components/schemas/Hutch'
+ *                   $ref: '#/components/schemas/Pen'
  *       404:
- *         description: Hutch not found
+ *         description: Pen not found
  *       401:
  *         description: Unauthorized
  */
-router.delete('/:farmId/:id', authMiddleware, enforceActivePlan, HutchesController.deleteHutch);
+router.delete(
+  "/:farmId/:id",
+  authMiddleware,
+  enforceActivePlan,
+  PensController.deletePen
+);
 
 /**
  * @swagger
- * /api/v1/hutches/{farmId}/{hutchId}/history:
+ * /api/v1/pens/{farmId}/{penId}/history:
  *   get:
- *     summary: Get history of pigs removed from a hutch
- *     tags: [Hutches]
+ *     summary: Get history of pigs removed from a pen
+ *     tags: [Pens]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -474,14 +499,14 @@ router.delete('/:farmId/:id', authMiddleware, enforceActivePlan, HutchesControll
  *         required: true
  *         description: The ID of the farm
  *       - in: path
- *         name: hutchId
+ *         name: penId
  *         schema:
  *           type: string
  *         required: true
- *         description: The hutch ID (e.g., Mercury-A1)
+ *         description: The pen ID (e.g., Mercury-A1)
  *     responses:
  *       200:
- *         description: Hutch pig history retrieved successfully
+ *         description: Pen pig history retrieved successfully
  *         content:
  *           application/json:
  *             schema:
@@ -492,7 +517,7 @@ router.delete('/:farmId/:id', authMiddleware, enforceActivePlan, HutchesControll
  *                   example: true
  *                 message:
  *                   type: string
- *                   example: Hutch pig history retrieved successfully
+ *                   example: Pen pig history retrieved successfully
  *                 data:
  *                   type: array
  *                   items:
@@ -501,7 +526,7 @@ router.delete('/:farmId/:id', authMiddleware, enforceActivePlan, HutchesControll
  *                       id:
  *                         type: string
  *                         format: uuid
- *                       hutch_id:
+ *                       pen_id:
  *                         type: string
  *                       pig_id:
  *                         type: string
@@ -530,7 +555,7 @@ router.delete('/:farmId/:id', authMiddleware, enforceActivePlan, HutchesControll
  *                       sold_to:
  *                         type: string
  *       404:
- *         description: Hutch not found
+ *         description: Pen not found
  *         content:
  *           application/json:
  *             schema:
@@ -541,10 +566,15 @@ router.delete('/:farmId/:id', authMiddleware, enforceActivePlan, HutchesControll
  *                   example: false
  *                 message:
  *                   type: string
- *                   example: Hutch not found
+ *                   example: Pen not found
  *       401:
  *         description: Unauthorized
  */
-router.get('/:farmId/:hutchId/history', authMiddleware, enforceActivePlan, HutchesController.getHutchRemovedPigHistory);
+router.get(
+  "/:farmId/:penId/history",
+  authMiddleware,
+  enforceActivePlan,
+  PensController.getPenRemovedPigHistory
+);
 
 export default router;

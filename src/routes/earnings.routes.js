@@ -1,9 +1,9 @@
-import express from 'express';
-import EarningsController from '../controllers/earnings.controllers.js';
-import { validateRequest } from '../middleware/validateRequest.js';
-import { earningsSchema, earningsUpdateSchema } from '../utils/validator.js';
-import authMiddleware from '../middleware/auth.middleware.js';
-import { requireActiveSubscription } from '../middleware/subscription.middleware.js';
+import express from "express";
+import EarningsController from "../controllers/earnings.controllers.js";
+import { validateRequest } from "../middleware/validateRequest.js";
+import { earningsSchema, earningsUpdateSchema } from "../utils/validator.js";
+import authMiddleware from "../middleware/auth.middleware.js";
+import { requireActiveSubscription } from "../middleware/subscription.middleware.js";
 
 const router = express.Router();
 const enforceActivePlan = requireActiveSubscription();
@@ -74,9 +74,9 @@ const enforceActivePlan = requireActiveSubscription();
  *           type: string
  *           description: Additional notes (optional)
  *           nullable: true
- *         hutch_id:
+ *         pen_id:
  *           type: string
- *           description: The ID of the hutch (optional)
+ *           description: The ID of the pen (optional)
  *           nullable: true
  *         is_deleted:
  *           type: boolean
@@ -103,7 +103,7 @@ const enforceActivePlan = requireActiveSubscription();
  *         includes_manure: false
  *         buyer_name: John Doe
  *         notes: Sold whole pig
- *         hutch_id: Mercury-A1
+ *         pen_id: Mercury-A1
  *         is_deleted: false
  *         created_at: 2025-05-29T17:00:00Z
  *         updated_at: 2025-05-29T17:00:00Z
@@ -147,7 +147,13 @@ const enforceActivePlan = requireActiveSubscription();
  *       401:
  *         description: Unauthorized
  */
-router.post('/:farmId', authMiddleware, enforceActivePlan, validateRequest(earningsSchema), EarningsController.createEarnings);
+router.post(
+  "/:farmId",
+  authMiddleware,
+  enforceActivePlan,
+  validateRequest(earningsSchema),
+  EarningsController.createEarnings
+);
 
 /**
  * @swagger
@@ -189,7 +195,12 @@ router.post('/:farmId', authMiddleware, enforceActivePlan, validateRequest(earni
  *       401:
  *         description: Unauthorized
  */
-router.get('/:farmId/:id', authMiddleware, enforceActivePlan, EarningsController.getEarnings);
+router.get(
+  "/:farmId/:id",
+  authMiddleware,
+  enforceActivePlan,
+  EarningsController.getEarnings
+);
 
 /**
  * @swagger
@@ -248,7 +259,12 @@ router.get('/:farmId/:id', authMiddleware, enforceActivePlan, EarningsController
  *       401:
  *         description: Unauthorized
  */
-router.get('/:farmId', authMiddleware, enforceActivePlan, EarningsController.getAllEarnings);
+router.get(
+  "/:farmId",
+  authMiddleware,
+  enforceActivePlan,
+  EarningsController.getAllEarnings
+);
 
 /**
  * @swagger
@@ -310,7 +326,7 @@ router.get('/:farmId', authMiddleware, enforceActivePlan, EarningsController.get
  *               notes:
  *                 type: string
  *                 nullable: true
- *               hutch_id:
+ *               pen_id:
  *                 type: string
  *                 nullable: true
  *     responses:
@@ -334,7 +350,13 @@ router.get('/:farmId', authMiddleware, enforceActivePlan, EarningsController.get
  *       401:
  *         description: Unauthorized
  */
-router.put('/:farmId/:id', authMiddleware, enforceActivePlan, validateRequest(earningsUpdateSchema), EarningsController.updateEarnings);
+router.put(
+  "/:farmId/:id",
+  authMiddleware,
+  enforceActivePlan,
+  validateRequest(earningsUpdateSchema),
+  EarningsController.updateEarnings
+);
 
 /**
  * @swagger
@@ -376,6 +398,11 @@ router.put('/:farmId/:id', authMiddleware, enforceActivePlan, validateRequest(ea
  *       401:
  *         description: Unauthorized
  */
-router.delete('/:farmId/:id', authMiddleware, enforceActivePlan, EarningsController.deleteEarnings);
+router.delete(
+  "/:farmId/:id",
+  authMiddleware,
+  enforceActivePlan,
+  EarningsController.deleteEarnings
+);
 
 export default router;

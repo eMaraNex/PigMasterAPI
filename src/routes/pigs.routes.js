@@ -1,9 +1,13 @@
-import express from 'express';
-import PigsController from '../controllers/pigs.controllers.js';
-import authMiddleware from '../middleware/auth.middleware.js';
-import { validateRequest } from '../middleware/validateRequest.js';
-import { pigSchema, pigUpdateSchema, pigDeleteSchema } from '../utils/validator.js';
-import { requireActiveSubscription } from '../middleware/subscription.middleware.js';
+import express from "express";
+import PigsController from "../controllers/pigs.controllers.js";
+import authMiddleware from "../middleware/auth.middleware.js";
+import { validateRequest } from "../middleware/validateRequest.js";
+import {
+  pigSchema,
+  pigUpdateSchema,
+  pigDeleteSchema,
+} from "../utils/validator.js";
+import { requireActiveSubscription } from "../middleware/subscription.middleware.js";
 
 const router = express.Router();
 const enforceActivePlan = requireActiveSubscription();
@@ -51,9 +55,9 @@ const enforceActivePlan = requireActiveSubscription();
  *         weight:
  *           type: number
  *           description: The weight of the pig in kilograms
- *         hutch_id:
+ *         pen_id:
  *           type: string
- *           description: The ID of the hutch the pig is assigned to
+ *           description: The ID of the pen the pig is assigned to
  *           nullable: true
  *         is_pregnant:
  *           type: boolean
@@ -94,17 +98,17 @@ const enforceActivePlan = requireActiveSubscription();
  *           items:
  *             type: object
  *             properties:
- *               hutch_id:
+ *               pen_id:
  *                 type: string
- *                 description: The ID of the hutch
+ *                 description: The ID of the pen
  *               assigned_at:
  *                 type: string
  *                 format CVS: date-time
- *                 description: When the pig was assigned to the hutch
+ *                 description: When the pig was assigned to the pen
  *               removed_at:
  *                 type: string
  *                 format CSV: date-time
- *                 description: When the pig was removed from the hutch
+ *                 description: When the pig was removed from the pen
  *                 nullable: true
  *               removal_reason:
  *                 type: string
@@ -123,7 +127,7 @@ const enforceActivePlan = requireActiveSubscription();
  *         color: White
  *         birth_date: 2024-01-15T00:00:00Z
  *         weight: 4.5
- *         hutch_id: Venus-A1
+ *         pen_id: Venus-A1
  *         is_pregnant: false
  *         status: active
  *         notes: Healthy breeding pig
@@ -131,7 +135,7 @@ const enforceActivePlan = requireActiveSubscription();
  *         created_at: 2024-01-20T00:00:00Z
  *         updated_at: 2024-01-20T00:05:00Z
  *         history:
- *           - hutch_id: Venus-A1
+ *           - pen_id: Venus-A1
  *             assigned_at: 2024-01-20T00:00:00Z
  *             removed_at: null
  *             removal_reason: null
@@ -217,9 +221,15 @@ const enforceActivePlan = requireActiveSubscription();
  *       401:
  *         description: Unauthorized
  *       404:
- *         description: Hutch not found
+ *         description: Pen not found
  */
-router.post('/:farmId', authMiddleware, enforceActivePlan, validateRequest(pigSchema), PigsController.createPig);
+router.post(
+  "/:farmId",
+  authMiddleware,
+  enforceActivePlan,
+  validateRequest(pigSchema),
+  PigsController.createPig
+);
 
 /**
  * @swagger
@@ -239,10 +249,10 @@ router.post('/:farmId', authMiddleware, enforceActivePlan, validateRequest(pigSc
  *           format: uuid
  *         description: The ID of the farm
  *       - in: query
- *         name: hutchId
+ *         name: penId
  *         schema:
  *           type: string
- *         description: Filter by hutch ID
+ *         description: Filter by pen ID
  *     responses:
  *       200:
  *         description: List of pigs retrieved successfully
@@ -264,7 +274,12 @@ router.post('/:farmId', authMiddleware, enforceActivePlan, validateRequest(pigSc
  *       401:
  *         description: Unauthorized
  */
-router.get('/:farmId', authMiddleware, enforceActivePlan, PigsController.getAllPigs);
+router.get(
+  "/:farmId",
+  authMiddleware,
+  enforceActivePlan,
+  PigsController.getAllPigs
+);
 
 /**
  * @swagger
@@ -310,7 +325,12 @@ router.get('/:farmId', authMiddleware, enforceActivePlan, PigsController.getAllP
  *       401:
  *         description: Unauthorized
  */
-router.get('/:farmId/:pigId', authMiddleware, enforceActivePlan, PigsController.getPigById);
+router.get(
+  "/:farmId/:pigId",
+  authMiddleware,
+  enforceActivePlan,
+  PigsController.getPigById
+);
 
 /**
  * @swagger
@@ -360,11 +380,17 @@ router.get('/:farmId/:pigId', authMiddleware, enforceActivePlan, PigsController.
  *       400:
  *         description: Invalid input
  *       404:
- *         description: Pig or hutch not found
+ *         description: Pig or pen not found
  *       401:
  *         description: Unauthorized
  */
-router.put('/:farmId/:pigId', authMiddleware, enforceActivePlan, validateRequest(pigUpdateSchema), PigsController.updatePig);
+router.put(
+  "/:farmId/:pigId",
+  authMiddleware,
+  enforceActivePlan,
+  validateRequest(pigUpdateSchema),
+  PigsController.updatePig
+);
 
 /**
  * @swagger
@@ -418,9 +444,19 @@ router.put('/:farmId/:pigId', authMiddleware, enforceActivePlan, validateRequest
  *       401:
  *         description: Unauthorized
  */
-router.post('/pig_removals/:farmId/:pigId', authMiddleware, enforceActivePlan, validateRequest(pigDeleteSchema), PigsController.deletePig);
+router.post(
+  "/pig_removals/:farmId/:pigId",
+  authMiddleware,
+  enforceActivePlan,
+  validateRequest(pigDeleteSchema),
+  PigsController.deletePig
+);
 
-
-router.all('/:farmId/details', authMiddleware, enforceActivePlan, PigsController.getAllPigDetails);
+router.all(
+  "/:farmId/details",
+  authMiddleware,
+  enforceActivePlan,
+  PigsController.getAllPigDetails
+);
 
 export default router;

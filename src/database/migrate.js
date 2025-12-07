@@ -1,13 +1,13 @@
-import { pool } from '../config/database.js';
-import logger from '../middleware/logger.js';
-import dotenv from 'dotenv';
+import { pool } from "../config/database.js";
+import logger from "../middleware/logger.js";
+import dotenv from "dotenv";
 
 dotenv.config();
 
 const migrations = [
   {
     version: 1,
-    name: 'create_initial_tables',
+    name: "create_initial_tables",
     up: `
       -- Enable UUID extension
       CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -144,8 +144,8 @@ const migrations = [
         UNIQUE(farm_id, name)
       );
 
-      -- Create hutches table
-      CREATE TABLE IF NOT EXISTS hutches (
+      -- Create pens table
+      CREATE TABLE IF NOT EXISTS pens (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
         name VARCHAR(50) NOT NULL,
         row_id UUID REFERENCES rows(id) ON DELETE CASCADE,
@@ -160,7 +160,7 @@ const migrations = [
         is_deleted INTEGER DEFAULT 0 CHECK (is_deleted IN (0, 1)),
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        -- Unique constraint: hutch name must be unique within each farm
+        -- Unique constraint: pen name must be unique within each farm
         UNIQUE(farm_id, name),
         -- Position must be unique within each row
         UNIQUE(row_id, level, position)
@@ -177,7 +177,7 @@ const migrations = [
         color VARCHAR(50) NOT NULL,
         birth_date DATE NOT NULL,
         weight DECIMAL(5,2) NOT NULL CHECK (weight > 0),
-        hutch_id UUID REFERENCES hutches(id),
+        pen_id UUID REFERENCES pens(id),
         parent_male_id VARCHAR(200) REFERENCES pigs(pig_id),
         parent_female_id VARCHAR(200) REFERENCES pigs(pig_id),
         acquisition_type VARCHAR(20) DEFAULT 'birth',
@@ -188,7 +188,7 @@ const migrations = [
         expected_birth_date DATE,
         actual_birth_date DATE,
         total_litters INTEGER DEFAULT 0 CHECK (total_litters >= 0),
-        total_kits INTEGER DEFAULT 0 CHECK (total_kits >= 0),
+        total_piglets INTEGER DEFAULT 0 CHECK (total_piglets >= 0),
         status VARCHAR(20) DEFAULT 'active',
         notes TEXT,
         is_deleted INTEGER DEFAULT 0 CHECK (is_deleted IN (0, 1)),
@@ -196,10 +196,10 @@ const migrations = [
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
 
-      -- Create hutch_pig_history table
-      CREATE TABLE IF NOT EXISTS hutch_pig_history (
+      -- Create pen_pig_history table
+      CREATE TABLE IF NOT EXISTS pen_pig_history (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-        hutch_id UUID REFERENCES hutches(id) ON DELETE CASCADE,
+        pen_id UUID REFERENCES pens(id) ON DELETE CASCADE,
         pig_id VARCHAR(200) REFERENCES pigs(pig_id) ON DELETE CASCADE,
         farm_id UUID NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
         assigned_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -220,9 +220,9 @@ const migrations = [
       WHERE role_id IS NULL AND is_deleted = 0;
     `,
     down: `
-      DROP TABLE IF EXISTS hutch_pig_history CASCADE;
+      DROP TABLE IF EXISTS pen_pig_history CASCADE;
       DROP TABLE IF EXISTS pigs CASCADE;
-      DROP TABLE IF EXISTS hutches CASCADE;
+      DROP TABLE IF EXISTS pens CASCADE;
       DROP TABLE IF EXISTS rows CASCADE;
       DROP TABLE IF EXISTS token_blacklist CASCADE;
       DROP TABLE IF EXISTS password_resets CASCADE;
@@ -231,11 +231,11 @@ const migrations = [
       -- Delete tier roles (careful: this orphans users with these roles)
       DELETE FROM roles WHERE name IN ('free', 'standard', 'advanced', 'admin', 'superadmin');
       DROP TABLE IF EXISTS roles CASCADE;
-    `
+    `,
   },
   {
     version: 2,
-    name: 'create_breeding_tables',
+    name: "create_breeding_tables",
     up: `
       -- Create breeding_records table
       CREATE TABLE IF NOT EXISTS breeding_records (
@@ -246,7 +246,7 @@ const migrations = [
         mating_date DATE NOT NULL,
         expected_birth_date DATE,
         actual_birth_date DATE,
-        number_of_kits INTEGER CHECK (number_of_kits >= 0),
+        number_of_piglets INTEGER CHECK (number_of_piglets >= 0),
         notes TEXT,
         alert_date DATE,
         is_deleted INTEGER DEFAULT 0 CHECK (is_deleted IN (0, 1)),
@@ -254,12 +254,12 @@ const migrations = [
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
 
-      -- Create kit_records table
-      CREATE TABLE IF NOT EXISTS kit_records (
+      -- Create piglet_records table
+      CREATE TABLE IF NOT EXISTS piglet_records (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
         breeding_record_id UUID NOT NULL REFERENCES breeding_records(id) ON DELETE CASCADE,
         farm_id UUID NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
-        kit_number VARCHAR(50) NOT NULL,
+        piglet_number VARCHAR(50) NOT NULL,
         birth_weight DECIMAL(5,2) CHECK (birth_weight > 0),
         gender VARCHAR(6) CHECK (gender IN ('male', 'female')),
         color VARCHAR(50),
@@ -290,13 +290,13 @@ const migrations = [
     `,
     down: `
       DROP TABLE IF EXISTS breeding_calendar CASCADE;
-      DROP TABLE IF EXISTS kit_records CASCADE;
+      DROP TABLE IF EXISTS piglet_records CASCADE;
       DROP TABLE IF EXISTS breeding_records CASCADE;
-    `
+    `,
   },
   {
     version: 3,
-    name: 'create_health_tables',
+    name: "create_health_tables",
     up: `
       -- Create health_records table
       CREATE TABLE IF NOT EXISTS health_records (
@@ -349,11 +349,11 @@ const migrations = [
       DROP TABLE IF EXISTS vaccination_schedules CASCADE;
       DROP TABLE IF EXISTS health_alerts CASCADE;
       DROP TABLE IF EXISTS health_records CASCADE;
-    `
+    `,
   },
   {
     version: 4,
-    name: 'create_feeding_tables',
+    name: "create_feeding_tables",
     up: `
       -- Create feeding_schedules table
       CREATE TABLE IF NOT EXISTS feeding_schedules (
@@ -374,7 +374,7 @@ const migrations = [
       CREATE TABLE IF NOT EXISTS feeding_records (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
         pig_id VARCHAR(200) REFERENCES pigs(pig_id) ON DELETE CASCADE,
-        hutch_id UUID REFERENCES hutches(id),
+        pen_id UUID REFERENCES pens(id),
         farm_id UUID NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
         feed_type VARCHAR(50) NOT NULL,
         amount VARCHAR(50) NOT NULL,
@@ -408,11 +408,11 @@ const migrations = [
       DROP TABLE IF EXISTS feed_inventory CASCADE;
       DROP TABLE IF EXISTS feeding_records CASCADE;
       DROP TABLE IF EXISTS feeding_schedules CASCADE;
-    `
+    `,
   },
   {
     version: 5,
-    name: 'create_financial_tables',
+    name: "create_financial_tables",
     up: `
       -- Create earnings_records table
       CREATE TABLE IF NOT EXISTS earnings_records (
@@ -429,7 +429,7 @@ const migrations = [
         includes_manure BOOLEAN DEFAULT false,
         buyer_name VARCHAR(100),
         notes TEXT,
-        hutch_id UUID REFERENCES hutches(id),
+        pen_id UUID REFERENCES pens(id),
         is_deleted INTEGER DEFAULT 0 CHECK (is_deleted IN (0, 1)),
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -454,7 +454,7 @@ const migrations = [
       CREATE TABLE IF NOT EXISTS removal_records (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
         pig_id VARCHAR(200) NOT NULL REFERENCES pigs(pig_id) ON DELETE CASCADE,
-        hutch_id UUID REFERENCES hutches(id),
+        pen_id UUID REFERENCES pens(id),
         farm_id UUID NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
         reason VARCHAR(100) NOT NULL CHECK (reason IN (
           'sale', 
@@ -466,7 +466,7 @@ const migrations = [
           'retirement', 
           'health issues', 
           'other', 
-          'transfer to another hutch', 
+          'transfer to another pen', 
           'lost', 
           'stolen'
         )),
@@ -504,11 +504,11 @@ const migrations = [
       DROP TABLE IF EXISTS removal_records CASCADE;
       DROP TABLE IF EXISTS production_records CASCADE;
       DROP TABLE IF EXISTS earnings_records CASCADE;
-    `
+    `,
   },
   {
     version: 6,
-    name: 'create_system_tables',
+    name: "create_system_tables",
     up: `
       -- Create notifications table
       CREATE TABLE IF NOT EXISTS notifications (
@@ -576,11 +576,11 @@ const migrations = [
       DROP TABLE IF EXISTS system_settings CASCADE;
       DROP TABLE IF EXISTS activity_logs CASCADE;
       DROP TABLE IF EXISTS notifications CASCADE;
-    `
+    `,
   },
   {
     version: 7,
-    name: 'create_indexes_and_triggers',
+    name: "create_indexes_and_triggers",
     up: `
       -- Create performance indexes
       CREATE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE is_deleted = 0;
@@ -590,25 +590,25 @@ const migrations = [
       CREATE INDEX IF NOT EXISTS idx_farms_created_by ON farms(created_by) WHERE is_deleted = 0;
       CREATE INDEX IF NOT EXISTS idx_pigs_farm_id ON pigs(farm_id) WHERE is_deleted = 0;
       CREATE INDEX IF NOT EXISTS idx_pigs_pig_id ON pigs(pig_id) WHERE is_deleted = 0;
-      CREATE INDEX IF NOT EXISTS idx_pigs_hutch_id ON pigs(hutch_id) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_pigs_pen_id ON pigs(pen_id) WHERE is_deleted = 0;
       CREATE INDEX IF NOT EXISTS idx_pigs_status ON pigs(status) WHERE is_deleted = 0;
-      CREATE INDEX IF NOT EXISTS idx_hutches_row_id ON hutches(row_id) WHERE is_deleted = 0;
-      CREATE INDEX IF NOT EXISTS idx_hutches_farm_id ON hutches(farm_id) WHERE is_deleted = 0;
-      CREATE INDEX IF NOT EXISTS idx_hutches_name ON hutches(name) WHERE is_deleted = 0;
-      CREATE INDEX IF NOT EXISTS idx_hutches_is_occupied ON hutches(is_occupied) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_pens_row_id ON pens(row_id) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_pens_farm_id ON pens(farm_id) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_pens_name ON pens(name) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_pens_is_occupied ON pens(is_occupied) WHERE is_deleted = 0;
       CREATE INDEX IF NOT EXISTS idx_rows_farm_id ON rows(farm_id) WHERE is_deleted = 0;
       CREATE INDEX IF NOT EXISTS idx_rows_name ON rows(name) WHERE is_deleted = 0;
-      CREATE INDEX IF NOT EXISTS idx_hutch_pig_history_hutch_id ON hutch_pig_history(hutch_id) WHERE is_deleted = 0;
-      CREATE INDEX IF NOT EXISTS idx_hutch_pig_history_pig_id ON hutch_pig_history(pig_id) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_pen_pig_history_pen_id ON pen_pig_history(pen_id) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_pen_pig_history_pig_id ON pen_pig_history(pig_id) WHERE is_deleted = 0;
       CREATE INDEX IF NOT EXISTS idx_breeding_records_farm_id ON breeding_records(farm_id) WHERE is_deleted = 0;
       CREATE INDEX IF NOT EXISTS idx_breeding_records_sow_id ON breeding_records(sow_id) WHERE is_deleted = 0;
       CREATE INDEX IF NOT EXISTS idx_breeding_records_boar_id ON breeding_records(boar_id) WHERE is_deleted = 0;
-      CREATE INDEX IF NOT EXISTS idx_kit_records_breeding_record_id ON kit_records(breeding_record_id) WHERE is_deleted = 0;
-      CREATE INDEX IF NOT EXISTS idx_kit_records_farm_id ON kit_records(farm_id) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_piglet_records_breeding_record_id ON piglet_records(breeding_record_id) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_piglet_records_farm_id ON piglet_records(farm_id) WHERE is_deleted = 0;
       CREATE INDEX IF NOT EXISTS idx_health_records_pig_id ON health_records(pig_id) WHERE is_deleted = 0;
       CREATE INDEX IF NOT EXISTS idx_health_records_date ON health_records(date) WHERE is_deleted = 0;
       CREATE INDEX IF NOT EXISTS idx_feeding_records_pig_id ON feeding_records(pig_id) WHERE is_deleted = 0;
-      CREATE INDEX IF NOT EXISTS idx_feeding_records_hutch_id ON feeding_records(hutch_id) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_feeding_records_pen_id ON feeding_records(pen_id) WHERE is_deleted = 0;
       CREATE INDEX IF NOT EXISTS idx_feeding_records_date ON feeding_records(feeding_time) WHERE is_deleted = 0;
       CREATE INDEX IF NOT EXISTS idx_earnings_records_farm_id ON earnings_records(farm_id) WHERE is_deleted = 0;
       CREATE INDEX IF NOT EXISTS idx_earnings_records_date ON earnings_records(date) WHERE is_deleted = 0;
@@ -637,7 +637,7 @@ const migrations = [
             UPDATE rows
             SET occupied = (
               SELECT COUNT(*)
-              FROM hutches
+              FROM pens
               WHERE row_id = NEW.row_id
               AND is_occupied = true
               AND is_deleted = 0
@@ -651,7 +651,7 @@ const migrations = [
             UPDATE rows
             SET occupied = (
               SELECT COUNT(*)
-              FROM hutches
+              FROM pens
               WHERE row_id = OLD.row_id
               AND is_occupied = true
               AND is_deleted = 0
@@ -669,11 +669,11 @@ const migrations = [
       CREATE TRIGGER update_farms_updated_at BEFORE UPDATE ON farms FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
       CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
       CREATE TRIGGER update_rows_updated_at BEFORE UPDATE ON rows FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-      CREATE TRIGGER update_hutches_updated_at BEFORE UPDATE ON hutches FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+      CREATE TRIGGER update_pens_updated_at BEFORE UPDATE ON pens FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
       CREATE TRIGGER update_pigs_updated_at BEFORE UPDATE ON pigs FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-      CREATE TRIGGER update_hutch_pig_history_updated_at BEFORE UPDATE ON hutch_pig_history FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+      CREATE TRIGGER update_pen_pig_history_updated_at BEFORE UPDATE ON pen_pig_history FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
       CREATE TRIGGER update_breeding_records_updated_at BEFORE UPDATE ON breeding_records FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-      CREATE TRIGGER update_kit_records_updated_at BEFORE UPDATE ON kit_records FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+      CREATE TRIGGER update_piglet_records_updated_at BEFORE UPDATE ON piglet_records FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
       CREATE TRIGGER update_health_records_updated_at BEFORE UPDATE ON health_records FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
       CREATE TRIGGER update_feeding_schedules_updated_at BEFORE UPDATE ON feeding_schedules FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
       CREATE TRIGGER update_earnings_records_updated_at BEFORE UPDATE ON earnings_records FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
@@ -685,9 +685,9 @@ const migrations = [
       CREATE TRIGGER update_health_alerts_updated_at BEFORE UPDATE ON health_alerts FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
       -- Create trigger for rows.occupied (handles INSERT/UPDATE/DELETE)
-      CREATE TRIGGER update_hutches_occupied
+      CREATE TRIGGER update_pens_occupied
       AFTER INSERT OR UPDATE OF is_occupied, is_deleted, row_id OR DELETE
-      ON hutches
+      ON pens
       FOR EACH ROW
       EXECUTE FUNCTION update_row_occupied();
     `,
@@ -696,11 +696,11 @@ const migrations = [
       DROP TRIGGER IF EXISTS update_farms_updated_at ON farms;
       DROP TRIGGER IF EXISTS update_users_updated_at ON users;
       DROP TRIGGER IF EXISTS update_rows_updated_at ON rows;
-      DROP TRIGGER IF EXISTS update_hutches_updated_at ON hutches;
+      DROP TRIGGER IF EXISTS update_pens_updated_at ON pens;
       DROP TRIGGER IF EXISTS update_pigs_updated_at ON pigs;
-      DROP TRIGGER IF EXISTS update_hutch_pig_history_updated_at ON hutch_pig_history;
+      DROP TRIGGER IF EXISTS update_pen_pig_history_updated_at ON pen_pig_history;
       DROP TRIGGER IF EXISTS update_breeding_records_updated_at ON breeding_records;
-      DROP TRIGGER IF EXISTS update_kit_records_updated_at ON kit_records;
+      DROP TRIGGER IF EXISTS update_piglet_records_updated_at ON piglet_records;
       DROP TRIGGER IF EXISTS update_health_records_updated_at ON health_records;
       DROP TRIGGER IF EXISTS update_feeding_schedules_updated_at ON feeding_schedules;
       DROP TRIGGER IF EXISTS update_earnings_records_updated_at ON earnings_records;
@@ -710,7 +710,7 @@ const migrations = [
       DROP TRIGGER IF EXISTS update_expenses_updated_at ON expenses;
       DROP TRIGGER IF EXISTS update_vaccination_schedules_updated_at ON vaccination_schedules;
       DROP TRIGGER IF EXISTS update_health_alerts_updated_at ON health_alerts;
-      DROP TRIGGER IF EXISTS update_hutches_occupied ON hutches;
+      DROP TRIGGER IF EXISTS update_pens_occupied ON pens;
 
       -- Drop functions
       DROP FUNCTION IF EXISTS update_updated_at_column;
@@ -724,25 +724,25 @@ const migrations = [
       DROP INDEX IF EXISTS idx_farms_created_by;
       DROP INDEX IF EXISTS idx_pigs_farm_id;
       DROP INDEX IF EXISTS idx_pigs_pig_id;
-      DROP INDEX IF EXISTS idx_pigs_hutch_id;
+      DROP INDEX IF EXISTS idx_pigs_pen_id;
       DROP INDEX IF EXISTS idx_pigs_status;
-      DROP INDEX IF EXISTS idx_hutches_row_id;
-      DROP INDEX IF EXISTS idx_hutches_farm_id;
-      DROP INDEX IF EXISTS idx_hutches_name;
-      DROP INDEX IF EXISTS idx_hutches_is_occupied;
+      DROP INDEX IF EXISTS idx_pens_row_id;
+      DROP INDEX IF EXISTS idx_pens_farm_id;
+      DROP INDEX IF EXISTS idx_pens_name;
+      DROP INDEX IF EXISTS idx_pens_is_occupied;
       DROP INDEX IF EXISTS idx_rows_farm_id;
       DROP INDEX IF EXISTS idx_rows_name;
-      DROP INDEX IF EXISTS idx_hutch_pig_history_hutch_id;
-      DROP INDEX IF EXISTS idx_hutch_pig_history_pig_id;
+      DROP INDEX IF EXISTS idx_pen_pig_history_pen_id;
+      DROP INDEX IF EXISTS idx_pen_pig_history_pig_id;
       DROP INDEX IF EXISTS idx_breeding_records_farm_id;
       DROP INDEX IF EXISTS idx_breeding_records_sow_id;
       DROP INDEX IF EXISTS idx_breeding_records_boar_id;
-      DROP INDEX IF EXISTS idx_kit_records_breeding_record_id;
-      DROP INDEX IF EXISTS idx_kit_records_farm_id;
+      DROP INDEX IF EXISTS idx_piglet_records_breeding_record_id;
+      DROP INDEX IF EXISTS idx_piglet_records_farm_id;
       DROP INDEX IF EXISTS idx_health_records_pig_id;
       DROP INDEX IF EXISTS idx_health_records_date;
       DROP INDEX IF EXISTS idx_feeding_records_pig_id;
-      DROP INDEX IF EXISTS idx_feeding_records_hutch_id;
+      DROP INDEX IF EXISTS idx_feeding_records_pen_id;
       DROP INDEX IF EXISTS idx_feeding_records_date;
       DROP INDEX IF EXISTS idx_earnings_records_farm_id;
       DROP INDEX IF EXISTS idx_earnings_records_date;
@@ -752,11 +752,11 @@ const migrations = [
       DROP INDEX IF EXISTS idx_notifications_is_read;
       DROP INDEX IF EXISTS idx_activity_logs_user_id;
       DROP INDEX IF EXISTS idx_activity_logs_farm_id;
-    `
+    `,
   },
   {
     version: 8,
-    name: 'create_pig_birth_history_table',
+    name: "create_pig_birth_history_table",
     up: `
       -- Create pig_birth_history table
       CREATE TABLE IF NOT EXISTS pig_birth_history (
@@ -765,7 +765,7 @@ const migrations = [
         sow_id VARCHAR(200) NOT NULL REFERENCES pigs(pig_id) ON DELETE CASCADE,
         breeding_record_id UUID REFERENCES breeding_records(id) ON DELETE SET NULL,
         birth_date DATE NOT NULL,
-        number_of_kits INTEGER NOT NULL CHECK (number_of_kits >= 0),
+        number_of_piglets INTEGER NOT NULL CHECK (number_of_piglets >= 0),
         notes TEXT,
         is_deleted INTEGER DEFAULT 0 CHECK (is_deleted IN (0, 1)),
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -783,7 +783,7 @@ const migrations = [
       FOR EACH ROW
       EXECUTE FUNCTION update_updated_at_column();
 
-      -- Create function to update pigs.total_litters and total_kits
+      -- Create function to update pigs.total_litters and total_piglets
       CREATE OR REPLACE FUNCTION update_pig_birth_stats()
       RETURNS TRIGGER AS $$
       BEGIN
@@ -795,8 +795,8 @@ const migrations = [
           AND farm_id = NEW.farm_id
           AND is_deleted = 0
         ),
-        total_kits = (
-          SELECT COALESCE(SUM(number_of_kits), 0)
+        total_piglets = (
+          SELECT COALESCE(SUM(number_of_piglets), 0)
           FROM pig_birth_history
           WHERE sow_id = NEW.sow_id
           AND farm_id = NEW.farm_id
@@ -812,7 +812,7 @@ const migrations = [
 
       -- Create trigger for pig_birth_history to update pig stats
       CREATE TRIGGER update_pig_birth_stats
-      AFTER INSERT OR UPDATE OF number_of_kits, is_deleted
+      AFTER INSERT OR UPDATE OF number_of_piglets, is_deleted
       ON pig_birth_history
       FOR EACH ROW
       EXECUTE FUNCTION update_pig_birth_stats();
@@ -830,11 +830,11 @@ const migrations = [
 
       -- Drop table
       DROP TABLE IF EXISTS pig_birth_history CASCADE;
-    `
+    `,
   },
   {
     version: 9,
-    name: 'create_alerts_table',
+    name: "create_alerts_table",
     up: `
       -- Create function to update updated_on timestamp
       CREATE OR REPLACE FUNCTION update_updated_on_column()
@@ -858,7 +858,7 @@ const migrations = [
         farm_id UUID NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
         user_id UUID REFERENCES users(id) ON DELETE SET NULL,
         pig_id VARCHAR(200) REFERENCES pigs(pig_id) ON DELETE SET NULL,
-        hutch_id UUID REFERENCES hutches(id) ON DELETE SET NULL,
+        pen_id UUID REFERENCES pens(id) ON DELETE SET NULL,
         notify_on DATE[] NOT NULL DEFAULT '{}',
         created_on TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_on TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -895,11 +895,11 @@ const migrations = [
 
       -- Drop function
       DROP FUNCTION IF EXISTS update_updated_on_column;
-    `
+    `,
   },
   {
     version: 10,
-    name: 'create_email_logs_table',
+    name: "create_email_logs_table",
     up: `
       -- Create email_logs table
       CREATE TABLE IF NOT EXISTS email_logs (
@@ -938,11 +938,11 @@ const migrations = [
 
       -- Drop table
       DROP TABLE IF EXISTS email_logs CASCADE;
-    `
+    `,
   },
   {
     version: 11,
-    name: 'add_payment_module',
+    name: "add_payment_module",
     up: `
       -- Create payments table
       CREATE TABLE IF NOT EXISTS payments (
@@ -989,8 +989,8 @@ const migrations = [
 
       -- Drop table
       DROP TABLE IF EXISTS payments CASCADE;
-    `
-  }
+    `,
+  },
 ];
 
 async function runMigrations() {
@@ -999,7 +999,7 @@ async function runMigrations() {
   try {
     // Verify database connection
     client = await pool.connect();
-    logger.info('Successfully connected to the database');
+    logger.info("Successfully connected to the database");
 
     // Create migrations table
     await client.query(`
@@ -1012,44 +1012,50 @@ async function runMigrations() {
     `);
 
     // Get executed migrations
-    const result = await client.query('SELECT version FROM migrations ORDER BY version');
+    const result = await client.query(
+      "SELECT version FROM migrations ORDER BY version"
+    );
     const executedVersions = result.rows.map(row => row.version);
 
     // Apply migrations
     for (const migration of migrations) {
       if (!executedVersions.includes(migration.version)) {
-        logger.info(`Applying migration ${migration.version}: ${migration.name}`);
-        await client.query('BEGIN');
+        logger.info(
+          `Applying migration ${migration.version}: ${migration.name}`
+        );
+        await client.query("BEGIN");
         try {
           await client.query(migration.up);
           await client.query(
-            'INSERT INTO migrations (version, name) VALUES ($1, $2)',
+            "INSERT INTO migrations (version, name) VALUES ($1, $2)",
             [migration.version, migration.name]
           );
-          await client.query('COMMIT');
+          await client.query("COMMIT");
           logger.info(`Migration ${migration.version} applied successfully`);
         } catch (err) {
-          await client.query('ROLLBACK');
+          await client.query("ROLLBACK");
           logger.error(`Migration ${migration.version} failed: ${err.message}`);
-          throw new Error(`Migration ${migration.version} failed: ${err.message}`);
+          throw new Error(
+            `Migration ${migration.version} failed: ${err.message}`
+          );
         }
       } else {
         logger.info(`Skipping migration ${migration.version}: already applied`);
       }
     }
 
-    logger.info('All migrations completed successfully');
+    logger.info("All migrations completed successfully");
   } catch (error) {
-    logger.error('Migration process failed:', error.message);
+    logger.error("Migration process failed:", error.message);
     throw new Error(`Migration process failed: ${error.message}`);
   } finally {
     if (client) {
       client.release();
-      logger.info('Database connection released');
+      logger.info("Database connection released");
     }
   }
 }
 
-// runMigrations();
+runMigrations();
 
 export default runMigrations;

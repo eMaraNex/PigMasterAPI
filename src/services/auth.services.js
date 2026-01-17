@@ -208,7 +208,7 @@ class AuthService {
     static async login({ email, password }) {
         try {
             const userResult = await DatabaseHelper.executeQuery(
-                `SELECT u.id, u.email, u.password_hash, u.name, u.role_id, u.farm_id, u.provider, r.permissions, u.login_count, u.email_verified
+                `SELECT u.id, u.email, u.password_hash, u.name, u.role_id, u.farm_id, u.provider, r.permissions, u.login_count, u.email_verified, u.created_at
                 FROM users u
                 JOIN roles r ON u.role_id = r.id
                 WHERE u.email = $1 AND u.is_deleted = 0 AND u.is_active = 1
@@ -261,7 +261,8 @@ class AuthService {
                     role_id: user.role_id,
                     farm_id: user.farm_id,
                     permissions: user.permissions,
-                    email_verified: user.email_verified
+                    email_verified: user.email_verified,
+                    created_at: user.created_at
                 }
             };
         } catch (error) {
@@ -628,7 +629,8 @@ class AuthService {
                     farm_id: user.farm_id,
                     permissions: user.permissions,
                     email_verified: user.email_verified,
-                    avatar_url: user.avatar_url
+                    avatar_url: user.avatar_url,
+                    created_at: user.created_at
                 }
             };
         } catch (error) {

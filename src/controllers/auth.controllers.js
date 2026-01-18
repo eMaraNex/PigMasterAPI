@@ -64,7 +64,8 @@ class AuthController {
             return successTemplate
                 .replace(/{{message}}/g, message)
                 .replace(/{{userName}}/g, userName)
-                .replace(/{{appName}}/g, 'Pig Farm');
+                .replace(/{{appName}}/g, 'Pig Farm')
+                .replace(/{{year}}/g, new Date().getFullYear());
         } catch (error) {
             logger.error(`Error loading success template: ${error.message}`);
         }
@@ -77,7 +78,8 @@ class AuthController {
 
             return errorTemplate
                 .replace(/{{errorMessage}}/g, errorMessage || 'The verification link is invalid or has expired.')
-                .replace(/{{appName}}/g, 'Pig Farm');
+                .replace(/{{appName}}/g, 'Pig Farm')
+                .replace(/{{year}}/g, new Date().getFullYear());
         } catch (error) {
             logger.error(`Error loading error template: ${error.message}`);
         }

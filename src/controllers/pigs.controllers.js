@@ -80,6 +80,28 @@ class PigsController {
       next(error);
     }
   }
-}
+  static async transferPig(req, res, next) {
+    try {
+      const { pigId, farmId } = req.params;
+      const transferData = req.body;
+      const userId = req.user.id;
+      const pig = await PigsService.transferPig(pigId, farmId, transferData, userId);
+      return SuccessResponse(res, 200, "Pig transferred successfully", pig);
+    } catch (error) {
+      logger.error(`Transfer pig error: ${error.message}`);
+      next(error);
+    }
+  }
+
+  static async getPigTransferHistory(req, res, next) {
+    try {
+      const { pigId, farmId } = req.params;
+      const history = await PigsService.getPigTransferHistory(pigId, farmId);
+      return SuccessResponse(res, 200, "Transfer history retrieved successfully", history);
+    } catch (error) {
+      logger.error(`Get transfer history error: ${error.message}`);
+      next(error);
+    }
+  }}
 
 export default PigsController;

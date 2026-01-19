@@ -991,6 +991,62 @@ const migrations = [
       DROP TABLE IF EXISTS payments CASCADE;
     `,
   },
+  {
+    version: 12,
+    name: "create_pig_transfer_history_table",
+    up: `
+      -- Create pig_transfer_history table
+      CREATE TABLE IF NOT EXISTS pig_transfer_history (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        farm_id UUID NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
+        pig_id VARCHAR(200) NOT NULL REFERENCES pigs(pig_id) ON DELETE CASCADE,
+        old_pen_id UUID REFERENCES pens(id) ON DELETE SET NULL,
+        new_pen_id UUID NOT NULL REFERENCES pens(id) ON DELETE RESTRICT,
+        transfer_reason VARCHAR(100) NOT NULL CHECK (transfer_reason IN (
+          'quarantine',
+          'cannibalism_prevention',
+          'breeding_program',
+          'overcrowding',
+          'facility_maintenance',
+          'social_grouping',
+          'other'
+        )),
+        transfer_notes TEXT,
+        transferred_by UUID REFERENCES users(id) ON DELETE SET NULL,
+        transferred_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        is_deleted INTEGER DEFAULT 0 CHECK (is_deleted IN (0, 1)),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+
+      -- Create indexes for pig_transfer_history
+      CREATE INDEX IF NOT EXISTS idx_pig_transfer_history_farm_id ON pig_transfer_history(farm_id) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_pig_transfer_history_pig_id ON pig_transfer_history(pig_id) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_pig_transfer_history_old_pen_id ON pig_transfer_history(old_pen_id) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_pig_transfer_history_new_pen_id ON pig_transfer_history(new_pen_id) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_pig_transfer_history_transferred_at ON pig_transfer_history(transferred_at) WHERE is_deleted = 0;
+
+      -- Create trigger for updated_at
+      CREATE TRIGGER update_pig_transfer_history_updated_at
+      BEFORE UPDATE ON pig_transfer_history
+      FOR EACH ROW
+      EXECUTE FUNCTION update_updated_at_column();
+    `,
+    down: `
+      -- Drop trigger
+      DROP TRIGGER IF EXISTS update_pig_transfer_history_updated_at ON pig_transfer_history;
+
+      -- Drop indexes
+      DROP INDEX IF EXISTS idx_pig_transfer_history_farm_id;
+      DROP INDEX IF EXISTS idx_pig_transfer_history_pig_id;
+      DROP INDEX IF EXISTS idx_pig_transfer_history_old_pen_id;
+      DROP INDEX IF EXISTS idx_pig_transfer_history_new_pen_id;
+      DROP INDEX IF EXISTS idx_pig_transfer_history_transferred_at;
+
+      -- Drop table
+      DROP TABLE IF EXISTS pig_transfer_history CASCADE;
+    `,
+  },
 ];
 
 async function runMigrations() {

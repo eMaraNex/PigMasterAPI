@@ -697,6 +697,180 @@ class PigsService {
       throw error;
     }
   }
+
+  static async transferPig(pigId, farmId, transferData, userId) {
+    const {
+      new_pen_id,
+      transfer_reason,
+      transfer_notes
+    } = transferData;
+
+    if (!new_pen_id || !transfer_reason) {
+      throw new ValidationError("Missing required transfer fields");
+    }
+
+    try {
+      // Get current pig
+      const pigResult = await DatabaseHelper.executeQuery(
+        "SELECT * FROM pigs WHERE pig_id = $1 AND farm_id = $2 AND is_deleted = 0",
+        [pigId, farmId]
+      );
+
+      if (pigResult.rows.length === 0) {
+        throw new ValidationError("Pig not found");
+      }
+
+      const currentPig = pigResult.rows[0];
+      const oldPenId = currentPig.pen_id;
+
+      // Validate new pen exists
+      const newPenResult = await DatabaseHelper.executeQuery(
+        "SELECT * FROM pens WHERE id = $1 AND farm_id = $2 AND is_deleted = 0",
+        [new_pen_id, farmId]
+      );
+
+      if (newPenResult.rows.length === 0) {
+        throw new ValidationError("Destination pen not found");
+      }
+
+      // Prevent self-transfer
+      if (oldPenId === new_pen_id) {
+        throw new ValidationError("Pig is already in this pen");
+      }
+
+      // Check new pen capacity (max 6 pigs per pen)
+      const pigCountResult = await DatabaseHelper.executeQuery(
+        "SELECT COUNT(*) as count FROM pigs WHERE pen_id = $1 AND farm_id = $2 AND is_deleted = 0",
+        [new_pen_id, farmId]
+      );
+
+      const currentPigCount = parseInt(pigCountResult.rows[0].count || 0);
+      if (currentPigCount >= 6) {
+        throw new ValidationError("Destination pen is at maximum capacity (6 pigs)");
+      }
+
+      // Update pig with new pen
+      const updatedPigResult = await DatabaseHelper.executeQuery(
+        `UPDATE pigs 
+         SET pen_id = $1, updated_at = CURRENT_TIMESTAMP 
+         WHERE pig_id = $2 AND farm_id = $3 
+         RETURNING *`,
+        [new_pen_id, pigId, farmId]
+      );
+
+      const transferredPig = updatedPigResult.rows[0];
+
+      // Get pen names for history
+      let oldPenName = "Unknown";
+      let newPenName = "Unknown";
+
+      if (oldPenId) {
+        const oldPenNameResult = await DatabaseHelper.executeQuery(
+          "SELECT name FROM pens WHERE id = $1",
+          [oldPenId]
+        );
+        if (oldPenNameResult.rows.length > 0) {
+          oldPenName = oldPenNameResult.rows[0].name;
+        }
+      }
+
+      const newPenNameResult = await DatabaseHelper.executeQuery(
+        "SELECT name FROM pens WHERE id = $1",
+        [new_pen_id]
+      );
+      if (newPenNameResult.rows.length > 0) {
+        newPenName = newPenNameResult.rows[0].name;
+      }
+
+      // Insert transfer history record
+      const { v4: uuidv4 } = await import("uuid");
+      await DatabaseHelper.executeQuery(
+        `INSERT INTO pig_transfer_history (id, farm_id, pig_id, old_pen_id, new_pen_id, transfer_reason, transfer_notes, transferred_by, transferred_at, created_at, is_deleted)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)`,
+        [
+          uuidv4(),
+          farmId,
+          pigId,
+          oldPenId || null,
+          new_pen_id,
+          transfer_reason,
+          transfer_notes || null,
+          userId,
+        ]
+      );
+
+      // Update old pen status if it has no more pigs
+      if (oldPenId) {
+        const oldPenPigCount = await DatabaseHelper.executeQuery(
+          "SELECT COUNT(*) as count FROM pigs WHERE pen_id = $1 AND farm_id = $2 AND is_deleted = 0",
+          [oldPenId, farmId]
+        );
+        const newCount = parseInt(oldPenPigCount.rows[0].count || 0);
+        if (newCount === 0) {
+          await DatabaseHelper.executeQuery(
+            "UPDATE pens SET is_occupied = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+            [oldPenId]
+          );
+        }
+      }
+
+      // Update new pen status
+      await DatabaseHelper.executeQuery(
+        "UPDATE pens SET is_occupied = true, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+        [new_pen_id]
+      );
+
+      // Add pen_pig_history entry
+      await DatabaseHelper.executeQuery(
+        `INSERT INTO pen_pig_history (id, pen_id, pig_id, farm_id, assigned_at, created_at, is_deleted)
+         VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)`,
+        [uuidv4(), new_pen_id, pigId, farmId]
+      );
+
+      logger.info(`Pig ${pigId} transferred from ${oldPenName} to ${newPenName} by user ${userId}`);
+
+      return {
+        ...transferredPig,
+        transfer_details: {
+          old_pen_id: oldPenId,
+          old_pen_name: oldPenName,
+          new_pen_id: new_pen_id,
+          new_pen_name: newPenName,
+          transfer_reason,
+          transferred_at: new Date().toISOString()
+        }
+      };
+    } catch (error) {
+      logger.error(`Error transferring pig: ${error.message}`);
+      throw error;
+    }
+  }
+
+  static async getPigTransferHistory(pigId, farmId) {
+    try {
+      const result = await DatabaseHelper.executeQuery(
+        `SELECT 
+          pth.*,
+          p.name AS pig_name,
+          p.pig_id,
+          op.name AS old_pen_name,
+          np.name AS new_pen_name,
+          u.name AS transferred_by_user
+         FROM pig_transfer_history pth
+         LEFT JOIN pigs p ON pth.pig_id = p.pig_id AND pth.farm_id = p.farm_id
+         LEFT JOIN pens op ON pth.old_pen_id = op.id
+         LEFT JOIN pens np ON pth.new_pen_id = np.id
+         LEFT JOIN users u ON pth.transferred_by = u.id
+         WHERE pth.pig_id = $1 AND pth.farm_id = $2 AND pth.is_deleted = 0
+         ORDER BY pth.transferred_at DESC`,
+        [pigId, farmId]
+      );
+      return result.rows;
+    } catch (error) {
+      logger.error(`Error fetching transfer history for pig ${pigId}: ${error.message}`);
+      throw error;
+    }
+  }
 }
 
 export default PigsService;

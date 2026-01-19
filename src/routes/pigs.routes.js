@@ -459,4 +459,148 @@ router.all(
   PigsController.getAllPigDetails
 );
 
+/**
+ * @swagger
+ * /api/v1/pigs/{farmId}/{pigId}/transfer:
+ *   post:
+ *     summary: Transfer a pig to a different pen
+ *     tags:
+ *       - Pigs
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: farmId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: The ID of the farm
+ *       - in: path
+ *         name: pigId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: The pig ID (e.g., PIG-001)
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - new_pen_id
+ *               - transfer_reason
+ *             properties:
+ *               new_pen_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: The ID of the destination pen
+ *               transfer_reason:
+ *                 type: string
+ *                 enum:
+ *                   - quarantine
+ *                   - cannibalism_prevention
+ *                   - breeding_program
+ *                   - overcrowding
+ *                   - facility_maintenance
+ *                   - social_grouping
+ *                   - other
+ *                 description: Reason for the transfer
+ *               transfer_notes:
+ *                 type: string
+ *                 nullable: true
+ *                 description: Optional notes about the transfer
+ *     responses:
+ *       200:
+ *         description: Pig transferred successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Pig transferred successfully
+ *                 data:
+ *                   $ref: '#/components/schemas/Pig'
+ *       400:
+ *         description: Invalid input or pen at capacity
+ *       404:
+ *         description: Pig or pen not found
+ *       401:
+ *         description: Unauthorized
+ */
+router.post("/:farmId/:pigId/transfer",  authMiddleware,  enforceActivePlan,  PigsController.transferPig);
+
+/**
+ * @swagger
+ * /api/v1/pigs/{farmId}/{pigId}/transfer-history:
+ *   get:
+ *     summary: Get pig transfer history
+ *     tags:
+ *       - Pigs
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: farmId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: The ID of the farm
+ *       - in: path
+ *         name: pigId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: The pig ID (e.g., PIG-001)
+ *     responses:
+ *       200:
+ *         description: Transfer history retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Transfer history retrieved successfully
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: string
+ *                         format: uuid
+ *                       pig_id:
+ *                         type: string
+ *                       old_pen_id:
+ *                         type: string
+ *                         format: uuid
+ *                       new_pen_id:
+ *                         type: string
+ *                         format: uuid
+ *                       transfer_reason:
+ *                         type: string
+ *                       transferred_at:
+ *                         type: string
+ *                         format: date-time
+ *                       transferred_by_user:
+ *                         type: string
+ *       404:
+ *         description: Pig not found
+ *       401:
+ *         description: Unauthorized
+ */
+router.get("/:farmId/:pigId/transfer-history",  authMiddleware,  enforceActivePlan,PigsController.getPigTransferHistory);
+
 export default router;

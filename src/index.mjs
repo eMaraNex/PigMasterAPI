@@ -85,12 +85,12 @@ app.use(
     origin: [
       "https://pigmaster.emaranex.com",
       "http://localhost:3000",
-      "https://pig-master-ui.vercel.app",
+      "https://pigmaster.vercel.app",
     ],
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
-  })
+  }),
 );
 
 app.use(bodyParser.json());

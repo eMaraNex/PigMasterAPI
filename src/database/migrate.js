@@ -1047,6 +1047,61 @@ const migrations = [
       DROP TABLE IF EXISTS pig_transfer_history CASCADE;
     `,
   },
+  {
+    version: 13,
+    name: "create_feeding_period_records_table",
+    up: `
+    -- Create feeding_period_records table for weekly/monthly bulk feeding records
+    CREATE TABLE IF NOT EXISTS feeding_period_records (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      farm_id UUID NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
+      pen_id UUID REFERENCES pens(id) ON DELETE SET NULL,
+      record_type VARCHAR(20) NOT NULL CHECK (record_type IN ('weekly', 'monthly')),
+      feed_type VARCHAR(50) NOT NULL,
+      total_amount VARCHAR(50) NOT NULL,
+      unit VARCHAR(20) DEFAULT 'kg',
+      start_date DATE NOT NULL,
+      end_date DATE NOT NULL,
+      pigs_in_pen JSONB DEFAULT '[]',
+      notes TEXT,
+      fed_by UUID REFERENCES users(id),
+      is_deleted INTEGER DEFAULT 0 CHECK (is_deleted IN (0, 1)),
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Create indexes
+    CREATE INDEX IF NOT EXISTS idx_feeding_period_records_farm_id ON feeding_period_records(farm_id) WHERE is_deleted = 0;
+    CREATE INDEX IF NOT EXISTS idx_feeding_period_records_pen_id ON feeding_period_records(pen_id) WHERE is_deleted = 0;
+    CREATE INDEX IF NOT EXISTS idx_feeding_period_records_dates ON feeding_period_records(start_date, end_date) WHERE is_deleted = 0;
+    CREATE INDEX IF NOT EXISTS idx_feeding_period_records_type ON feeding_period_records(record_type) WHERE is_deleted = 0;
+
+    -- Create trigger for updated_at
+    CREATE TRIGGER update_feeding_period_records_updated_at
+    BEFORE UPDATE ON feeding_period_records
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+    -- Modify feeding_records to add record_type
+    ALTER TABLE feeding_records ADD COLUMN IF NOT EXISTS record_type VARCHAR(20) DEFAULT 'daily' CHECK (record_type IN ('daily', 'weekly', 'monthly'));
+  `,
+    down: `
+    -- Drop trigger
+    DROP TRIGGER IF EXISTS update_feeding_period_records_updated_at ON feeding_period_records;
+
+    -- Drop indexes
+    DROP INDEX IF EXISTS idx_feeding_period_records_farm_id;
+    DROP INDEX IF EXISTS idx_feeding_period_records_pen_id;
+    DROP INDEX IF EXISTS idx_feeding_period_records_dates;
+    DROP INDEX IF EXISTS idx_feeding_period_records_type;
+
+    -- Drop table
+    DROP TABLE IF EXISTS feeding_period_records CASCADE;
+
+    -- Remove column from feeding_records
+    ALTER TABLE feeding_records DROP COLUMN IF EXISTS record_type;
+  `,
+  },
 ];
 
 async function runMigrations() {

@@ -507,6 +507,19 @@ export const feedingRecordSchema = Joi.object({
   notes: Joi.string().allow(null).optional(),
 });
 
+export const feedingPeriodRecordSchema = Joi.object({
+  farm_id: Joi.string().uuid().optional(),
+  pen_id: Joi.string().uuid().optional().allow(null),
+  record_type: Joi.string().valid("weekly", "monthly").required(),
+  feed_type: Joi.string().required(),
+  total_amount: Joi.string().required(),
+  unit: Joi.string().valid("kg", "liters").default("kg"),
+  start_date: Joi.date().required(),
+  end_date: Joi.date().required(),
+  pigs_in_pen: Joi.array().items(Joi.string()).optional(),
+  notes: Joi.string().allow("", null).optional(),
+});
+
 export const vaccinationScheduleSchema = Joi.object({
   farm_id: Joi.string().uuid().required(),
   vaccine_name: Joi.string().max(100).required(),

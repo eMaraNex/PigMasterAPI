@@ -1051,56 +1051,203 @@ const migrations = [
     version: 13,
     name: "create_feeding_period_records_table",
     up: `
-    -- Create feeding_period_records table for weekly/monthly bulk feeding records
-    CREATE TABLE IF NOT EXISTS feeding_period_records (
-      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-      farm_id UUID NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
-      pen_id UUID REFERENCES pens(id) ON DELETE SET NULL,
-      record_type VARCHAR(20) NOT NULL CHECK (record_type IN ('weekly', 'monthly')),
-      feed_type VARCHAR(50) NOT NULL,
-      total_amount VARCHAR(50) NOT NULL,
-      unit VARCHAR(20) DEFAULT 'kg',
-      start_date DATE NOT NULL,
-      end_date DATE NOT NULL,
-      pigs_in_pen JSONB DEFAULT '[]',
-      notes TEXT,
-      fed_by UUID REFERENCES users(id),
-      is_deleted INTEGER DEFAULT 0 CHECK (is_deleted IN (0, 1)),
-      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-    );
+      CREATE TABLE IF NOT EXISTS feeding_period_records (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        farm_id UUID NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
+        pen_id UUID REFERENCES pens(id) ON DELETE SET NULL,
+        record_type VARCHAR(20) NOT NULL CHECK (record_type IN ('weekly', 'monthly')),
+        feed_type VARCHAR(50) NOT NULL,
+        total_amount VARCHAR(50) NOT NULL,
+        unit VARCHAR(20) DEFAULT 'kg',
+        start_date DATE NOT NULL,
+        end_date DATE NOT NULL,
+        pigs_in_pen JSONB DEFAULT '[]',
+        notes TEXT,
+        fed_by UUID REFERENCES users(id),
+        is_deleted INTEGER DEFAULT 0 CHECK (is_deleted IN (0, 1)),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
 
-    -- Create indexes
-    CREATE INDEX IF NOT EXISTS idx_feeding_period_records_farm_id ON feeding_period_records(farm_id) WHERE is_deleted = 0;
-    CREATE INDEX IF NOT EXISTS idx_feeding_period_records_pen_id ON feeding_period_records(pen_id) WHERE is_deleted = 0;
-    CREATE INDEX IF NOT EXISTS idx_feeding_period_records_dates ON feeding_period_records(start_date, end_date) WHERE is_deleted = 0;
-    CREATE INDEX IF NOT EXISTS idx_feeding_period_records_type ON feeding_period_records(record_type) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_feeding_period_records_farm_id ON feeding_period_records(farm_id) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_feeding_period_records_pen_id ON feeding_period_records(pen_id) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_feeding_period_records_dates ON feeding_period_records(start_date, end_date) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_feeding_period_records_type ON feeding_period_records(record_type) WHERE is_deleted = 0;
 
-    -- Create trigger for updated_at
-    CREATE TRIGGER update_feeding_period_records_updated_at
-    BEFORE UPDATE ON feeding_period_records
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
+      CREATE TRIGGER update_feeding_period_records_updated_at
+      BEFORE UPDATE ON feeding_period_records FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-    -- Modify feeding_records to add record_type
-    ALTER TABLE feeding_records ADD COLUMN IF NOT EXISTS record_type VARCHAR(20) DEFAULT 'daily' CHECK (record_type IN ('daily', 'weekly', 'monthly'));
-  `,
+      ALTER TABLE feeding_records ADD COLUMN IF NOT EXISTS record_type VARCHAR(20) DEFAULT 'daily' CHECK (record_type IN ('daily', 'weekly', 'monthly'));
+    `,
     down: `
-    -- Drop trigger
-    DROP TRIGGER IF EXISTS update_feeding_period_records_updated_at ON feeding_period_records;
+      DROP TRIGGER IF EXISTS update_feeding_period_records_updated_at ON feeding_period_records;
+      DROP INDEX IF EXISTS idx_feeding_period_records_farm_id;
+      DROP INDEX IF EXISTS idx_feeding_period_records_pen_id;
+      DROP INDEX IF EXISTS idx_feeding_period_records_dates;
+      DROP INDEX IF EXISTS idx_feeding_period_records_type;
+      DROP TABLE IF EXISTS feeding_period_records CASCADE;
+      ALTER TABLE feeding_records DROP COLUMN IF EXISTS record_type;
+    `,
+  },
+  {
+    // ─────────────────────────────────────────────────────────────────────────
+    // Migration 14 — unify feeding tables
+    //
+    // Goal: one table (feeding_records) handles daily, weekly AND monthly records.
+    //
+    // Strategy:
+    //   1. Add all period-specific columns to feeding_records (nullable so existing
+    //      daily rows are unaffected).
+    //   2. Migrate every row from feeding_period_records into feeding_records.
+    //   3. Drop feeding_period_records and its infrastructure.
+    //   4. Add pigs_count column (needed for per-pig/day maths).
+    //   5. Add supporting indexes.
+    //
+    // record_type values after this migration:
+    //   'daily'   — pig_id or pen_id, uses feeding_time, amount, unit
+    //   'weekly'  — pen_id required, uses start_date / end_date, total_amount, unit
+    //   'monthly' — pen_id required, uses start_date / end_date, total_amount, unit
+    // ─────────────────────────────────────────────────────────────────────────
+    version: 14,
+    name: "unify_feeding_tables",
+    up: `
+      -- 1. Ensure record_type column exists with the extended check constraint
+      --    (migration 13 already adds it as 'daily' only; widen it here)
+      ALTER TABLE feeding_records DROP CONSTRAINT IF EXISTS feeding_records_record_type_check;
+      ALTER TABLE feeding_records
+        ADD CONSTRAINT feeding_records_record_type_check
+        CHECK (record_type IN ('daily', 'weekly', 'monthly'));
 
-    -- Drop indexes
-    DROP INDEX IF EXISTS idx_feeding_period_records_farm_id;
-    DROP INDEX IF EXISTS idx_feeding_period_records_pen_id;
-    DROP INDEX IF EXISTS idx_feeding_period_records_dates;
-    DROP INDEX IF EXISTS idx_feeding_period_records_type;
+      -- 2. Add period-specific columns (all nullable — daily rows leave them NULL)
+      ALTER TABLE feeding_records
+        ADD COLUMN IF NOT EXISTS start_date   DATE,
+        ADD COLUMN IF NOT EXISTS end_date     DATE,
+        ADD COLUMN IF NOT EXISTS total_amount NUMERIC(12, 3),
+        ADD COLUMN IF NOT EXISTS pigs_in_pen  JSONB   DEFAULT '[]',
+        ADD COLUMN IF NOT EXISTS pigs_count   INTEGER DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS updated_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
 
-    -- Drop table
-    DROP TABLE IF EXISTS feeding_period_records CASCADE;
+      -- 3. Add trigger for updated_at on feeding_records
+      DROP TRIGGER IF EXISTS update_feeding_records_updated_at ON feeding_records;
+      CREATE TRIGGER update_feeding_records_updated_at
+      BEFORE UPDATE ON feeding_records
+      FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-    -- Remove column from feeding_records
-    ALTER TABLE feeding_records DROP COLUMN IF EXISTS record_type;
-  `,
+      -- 4. Migrate existing period records into feeding_records
+      --    feeding_period_records.total_amount is VARCHAR — cast to numeric.
+      INSERT INTO feeding_records (
+        id, farm_id, pen_id, record_type,
+        feed_type,
+        amount,        -- keep for legacy; set equal to total_amount
+        total_amount,
+        unit,
+        start_date, end_date,
+        pigs_in_pen,
+        -- pigs_count: use stored value if column already exists, else 0
+        pigs_count,
+        notes, fed_by,
+        feeding_time,  -- period rows have no feeding_time; use start_date cast
+        is_deleted, created_at
+      )
+      SELECT
+        id,
+        farm_id,
+        pen_id,
+        record_type,
+        feed_type,
+        total_amount,                                 -- amount (varchar)
+        total_amount::NUMERIC(12,3),                  -- total_amount (numeric)
+        unit,
+        start_date,
+        end_date,
+        COALESCE(pigs_in_pen, '[]'::JSONB),
+        0,   -- pigs_count: no historical data available, defaults to 0
+        notes,
+        fed_by,
+        start_date::TIMESTAMP WITH TIME ZONE,         -- feeding_time placeholder
+        is_deleted,
+        created_at
+      FROM feeding_period_records fpr
+      ON CONFLICT (id) DO NOTHING;
+
+      -- 5. Drop the now-redundant period table and its infrastructure
+      DROP TRIGGER IF EXISTS update_feeding_period_records_updated_at ON feeding_period_records;
+      DROP INDEX  IF EXISTS idx_feeding_period_records_farm_id;
+      DROP INDEX  IF EXISTS idx_feeding_period_records_pen_id;
+      DROP INDEX  IF EXISTS idx_feeding_period_records_dates;
+      DROP INDEX  IF EXISTS idx_feeding_period_records_type;
+      DROP TABLE  IF EXISTS feeding_period_records CASCADE;
+
+      -- 6. Add indexes for the new columns
+      CREATE INDEX IF NOT EXISTS idx_feeding_records_record_type
+        ON feeding_records(record_type) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_feeding_records_start_date
+        ON feeding_records(start_date) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_feeding_records_farm_id
+        ON feeding_records(farm_id)    WHERE is_deleted = 0;
+    `,
+    down: `
+      -- Re-create feeding_period_records and move weekly/monthly rows back
+      CREATE TABLE IF NOT EXISTS feeding_period_records (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        farm_id UUID NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
+        pen_id UUID REFERENCES pens(id) ON DELETE SET NULL,
+        record_type VARCHAR(20) NOT NULL CHECK (record_type IN ('weekly', 'monthly')),
+        feed_type VARCHAR(50) NOT NULL,
+        total_amount VARCHAR(50) NOT NULL,
+        unit VARCHAR(20) DEFAULT 'kg',
+        start_date DATE NOT NULL,
+        end_date DATE NOT NULL,
+        pigs_in_pen JSONB DEFAULT '[]',
+        pigs_count INTEGER DEFAULT 0,
+        notes TEXT,
+        fed_by UUID REFERENCES users(id),
+        is_deleted INTEGER DEFAULT 0 CHECK (is_deleted IN (0, 1)),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+
+      INSERT INTO feeding_period_records
+        (id, farm_id, pen_id, record_type, feed_type, total_amount,
+         unit, start_date, end_date, pigs_in_pen, pigs_count,
+         notes, fed_by, is_deleted, created_at)
+      SELECT
+        id, farm_id, pen_id, record_type, feed_type, amount,
+        unit, start_date, end_date, pigs_in_pen, pigs_count,
+        notes, fed_by, is_deleted, created_at
+      FROM feeding_records
+      WHERE record_type IN ('weekly', 'monthly');
+
+      -- Remove period rows from unified table
+      DELETE FROM feeding_records WHERE record_type IN ('weekly', 'monthly');
+
+      -- Drop added columns
+      ALTER TABLE feeding_records
+        DROP COLUMN IF EXISTS start_date,
+        DROP COLUMN IF EXISTS end_date,
+        DROP COLUMN IF EXISTS total_amount,
+        DROP COLUMN IF EXISTS pigs_in_pen,
+        DROP COLUMN IF EXISTS pigs_count,
+        DROP COLUMN IF EXISTS updated_at;
+
+      DROP TRIGGER IF EXISTS update_feeding_records_updated_at ON feeding_records;
+      DROP INDEX  IF EXISTS idx_feeding_records_record_type;
+      DROP INDEX  IF EXISTS idx_feeding_records_start_date;
+      DROP INDEX  IF EXISTS idx_feeding_records_farm_id;
+
+      -- Restore constraint to daily-only
+      ALTER TABLE feeding_records DROP CONSTRAINT IF EXISTS feeding_records_record_type_check;
+      ALTER TABLE feeding_records
+        ADD CONSTRAINT feeding_records_record_type_check
+        CHECK (record_type IN ('daily', 'weekly', 'monthly'));
+
+      CREATE INDEX IF NOT EXISTS idx_feeding_period_records_farm_id ON feeding_period_records(farm_id) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_feeding_period_records_pen_id  ON feeding_period_records(pen_id)  WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_feeding_period_records_dates   ON feeding_period_records(start_date, end_date) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_feeding_period_records_type    ON feeding_period_records(record_type) WHERE is_deleted = 0;
+      CREATE TRIGGER update_feeding_period_records_updated_at
+      BEFORE UPDATE ON feeding_period_records FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    `,
   },
 ];
 
@@ -1124,7 +1271,7 @@ async function runMigrations() {
 
     // Get executed migrations
     const result = await client.query(
-      "SELECT version FROM migrations ORDER BY version"
+      "SELECT version FROM migrations ORDER BY version",
     );
     const executedVersions = result.rows.map(row => row.version);
 
@@ -1132,14 +1279,14 @@ async function runMigrations() {
     for (const migration of migrations) {
       if (!executedVersions.includes(migration.version)) {
         logger.info(
-          `Applying migration ${migration.version}: ${migration.name}`
+          `Applying migration ${migration.version}: ${migration.name}`,
         );
         await client.query("BEGIN");
         try {
           await client.query(migration.up);
           await client.query(
             "INSERT INTO migrations (version, name) VALUES ($1, $2)",
-            [migration.version, migration.name]
+            [migration.version, migration.name],
           );
           await client.query("COMMIT");
           logger.info(`Migration ${migration.version} applied successfully`);
@@ -1147,7 +1294,7 @@ async function runMigrations() {
           await client.query("ROLLBACK");
           logger.error(`Migration ${migration.version} failed: ${err.message}`);
           throw new Error(
-            `Migration ${migration.version} failed: ${err.message}`
+            `Migration ${migration.version} failed: ${err.message}`,
           );
         }
       } else {

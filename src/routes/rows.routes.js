@@ -174,7 +174,6 @@ router.post(
 router.get(
   "/list/:farmId",
   authMiddleware,
-  enforceActivePlan,
   RowsController.getAllRows
 );
 
@@ -224,7 +223,6 @@ router.get(
 router.get(
   "/list/:farmId/:rowId",
   authMiddleware,
-  enforceActivePlan,
   RowsController.getRowByName
 );
 

@@ -277,7 +277,7 @@ router.post(
 router.get(
   "/:farmId",
   authMiddleware,
-  enforceActivePlan,
+  // enforceActivePlan,
   PigsController.getAllPigs
 );
 
@@ -328,7 +328,7 @@ router.get(
 router.get(
   "/:farmId/:pigId",
   authMiddleware,
-  enforceActivePlan,
+  // enforceActivePlan,
   PigsController.getPigById
 );
 
@@ -455,7 +455,7 @@ router.post(
 router.all(
   "/:farmId/details",
   authMiddleware,
-  enforceActivePlan,
+  // enforceActivePlan,
   PigsController.getAllPigDetails
 );
 
@@ -601,6 +601,6 @@ router.post("/:farmId/:pigId/transfer",  authMiddleware,  enforceActivePlan,  Pi
  *       401:
  *         description: Unauthorized
  */
-router.get("/:farmId/:pigId/transfer-history",  authMiddleware,  enforceActivePlan,PigsController.getPigTransferHistory);
+router.get("/:farmId/:pigId/transfer-history",  authMiddleware, PigsController.getPigTransferHistory);
 
 export default router;

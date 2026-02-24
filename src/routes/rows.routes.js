@@ -287,7 +287,7 @@ router.get(
 router.put(
   "/update/:farmId/:rowId",
   authMiddleware,
-  enforceActivePlan,
+  // enforceActivePlan,
   RowsController.updateRow
 );
 

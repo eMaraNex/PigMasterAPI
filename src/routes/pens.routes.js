@@ -255,7 +255,7 @@ router.post(
 router.get(
   "/:farmId/:id",
   authMiddleware,
-  enforceActivePlan,
+  // enforceActivePlan,
   PensController.getPen
 );
 
@@ -325,7 +325,7 @@ router.get(
 router.get(
   "/:farmId",
   authMiddleware,
-  enforceActivePlan,
+  // enforceActivePlan,
   PensController.getAllPens
 );
 
@@ -573,7 +573,7 @@ router.delete(
 router.get(
   "/:farmId/:penId/history",
   authMiddleware,
-  enforceActivePlan,
+  // enforceActivePlan,
   PensController.getPenRemovedPigHistory
 );
 

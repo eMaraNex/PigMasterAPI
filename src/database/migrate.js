@@ -1047,6 +1047,71 @@ const migrations = [
       DROP TABLE IF EXISTS pig_transfer_history CASCADE;
     `,
   },
+  {
+    version: 13,
+    name: "setup_unified_feeding_records",
+    up: `
+      -- Extend feeding_records to handle daily, weekly and monthly records in
+      -- one table. All new columns are nullable / have safe defaults so any
+      -- existing daily rows are completely unaffected.
+
+      -- 1. Widen (or add) the record_type column
+      ALTER TABLE feeding_records
+        ADD COLUMN IF NOT EXISTS record_type VARCHAR(20) DEFAULT 'daily';
+
+      ALTER TABLE feeding_records
+        DROP CONSTRAINT IF EXISTS feeding_records_record_type_check;
+      ALTER TABLE feeding_records
+        ADD CONSTRAINT feeding_records_record_type_check
+        CHECK (record_type IN ('daily', 'weekly', 'monthly'));
+
+      -- 2. Add period-specific columns (NULL-safe for existing daily rows)
+      ALTER TABLE feeding_records
+        ADD COLUMN IF NOT EXISTS start_date   DATE,
+        ADD COLUMN IF NOT EXISTS end_date     DATE,
+        ADD COLUMN IF NOT EXISTS total_amount NUMERIC(12, 3),
+        ADD COLUMN IF NOT EXISTS pigs_in_pen  JSONB   DEFAULT '[]',
+        ADD COLUMN IF NOT EXISTS pigs_count   INTEGER DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS updated_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+
+      -- 3. updated_at trigger on feeding_records
+      DROP TRIGGER IF EXISTS update_feeding_records_updated_at ON feeding_records;
+      CREATE TRIGGER update_feeding_records_updated_at
+      BEFORE UPDATE ON feeding_records
+      FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+      -- 4. Indexes for the new columns
+      CREATE INDEX IF NOT EXISTS idx_feeding_records_record_type
+        ON feeding_records(record_type) WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_feeding_records_farm_id
+        ON feeding_records(farm_id)    WHERE is_deleted = 0;
+      CREATE INDEX IF NOT EXISTS idx_feeding_records_start_date
+        ON feeding_records(start_date) WHERE is_deleted = 0;
+
+      -- 5. Clean up feeding_period_records if it exists from an earlier deploy
+      DROP TRIGGER IF EXISTS update_feeding_period_records_updated_at ON feeding_period_records;
+      DROP INDEX  IF EXISTS idx_feeding_period_records_farm_id;
+      DROP INDEX  IF EXISTS idx_feeding_period_records_pen_id;
+      DROP INDEX  IF EXISTS idx_feeding_period_records_dates;
+      DROP INDEX  IF EXISTS idx_feeding_period_records_type;
+      DROP TABLE  IF EXISTS feeding_period_records CASCADE;
+    `,
+    down: `
+      DROP TRIGGER IF EXISTS update_feeding_records_updated_at ON feeding_records;
+      DROP INDEX  IF EXISTS idx_feeding_records_record_type;
+      DROP INDEX  IF EXISTS idx_feeding_records_farm_id;
+      DROP INDEX  IF EXISTS idx_feeding_records_start_date;
+
+      ALTER TABLE feeding_records
+        DROP COLUMN IF EXISTS record_type,
+        DROP COLUMN IF EXISTS start_date,
+        DROP COLUMN IF EXISTS end_date,
+        DROP COLUMN IF EXISTS total_amount,
+        DROP COLUMN IF EXISTS pigs_in_pen,
+        DROP COLUMN IF EXISTS pigs_count,
+        DROP COLUMN IF EXISTS updated_at;
+    `,
+  },
 ];
 
 async function runMigrations() {
@@ -1069,7 +1134,7 @@ async function runMigrations() {
 
     // Get executed migrations
     const result = await client.query(
-      "SELECT version FROM migrations ORDER BY version"
+      "SELECT version FROM migrations ORDER BY version",
     );
     const executedVersions = result.rows.map(row => row.version);
 
@@ -1077,14 +1142,14 @@ async function runMigrations() {
     for (const migration of migrations) {
       if (!executedVersions.includes(migration.version)) {
         logger.info(
-          `Applying migration ${migration.version}: ${migration.name}`
+          `Applying migration ${migration.version}: ${migration.name}`,
         );
         await client.query("BEGIN");
         try {
           await client.query(migration.up);
           await client.query(
             "INSERT INTO migrations (version, name) VALUES ($1, $2)",
-            [migration.version, migration.name]
+            [migration.version, migration.name],
           );
           await client.query("COMMIT");
           logger.info(`Migration ${migration.version} applied successfully`);
@@ -1092,7 +1157,7 @@ async function runMigrations() {
           await client.query("ROLLBACK");
           logger.error(`Migration ${migration.version} failed: ${err.message}`);
           throw new Error(
-            `Migration ${migration.version} failed: ${err.message}`
+            `Migration ${migration.version} failed: ${err.message}`,
           );
         }
       } else {

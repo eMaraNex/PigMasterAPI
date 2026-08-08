@@ -5,6 +5,7 @@ import { DatabaseHelper } from '../config/database.js';
 import EmailService from './email.services.js';
 import logger from '../middleware/logger.js';
 import { ValidationError, NotFoundError, UnauthorizedError } from '../middleware/errors.js';
+import SubscriptionService from './subscription.service.js';
 
 class AuthService {
     static async register({
@@ -178,6 +179,8 @@ class AuthService {
             } catch (emailError) {
                 logger.warn(`Email service error for ${email}: ${emailError.message}`);
             }
+
+            await SubscriptionService.createTrialSubscription(userId);
 
             // Log successful registration
             logger.info(`User registered successfully: ${email} with role_id ${finalRoleId}`);

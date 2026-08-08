@@ -5,9 +5,10 @@
   "main": "src/index.mjs",
   "type": "module",
   "scripts": {
-    "start": "node --max-old-space-size=256 --no-experimental-fetch src/index.mjs",
-    "dev": "nodemon --max-old-space-size=256 --no-experimental-fetch src/index.mjs",
-    "migrate": "node --max-old-space-size=128 --no-experimental-fetch src/database/migrate.js",
+    "start": "node --max-old-space-size=256 src/index.mjs",
+    "dev": "nodemon --max-old-space-size=256 src/index.mjs",
+    "migrate": "node-pg-migrate up --migrations-dir src/database/migrations --migrations-table pgmigrations --config migrations-config.js",
+    "migrate:down": "node-pg-migrate down --migrations-dir src/database/migrations --migrations-table pgmigrations --config migrations-config.js",
     "seed": "node src/database/seed.js",
     "test": "jest --detectOpenHandles",
     "test:watch": "jest --watch",
@@ -44,6 +45,7 @@
   "devDependencies": {
     "eslint": "^8.55.0",
     "jest": "^29.7.0",
+    "node-pg-migrate": "^9.0.0",
     "nodemon": "^3.0.2",
     "supertest": "^6.3.3"
   }

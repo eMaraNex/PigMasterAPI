@@ -1,0 +1,59 @@
+name: PigMasterAPI PR Checks
+
+on:
+  pull_request:
+    paths:
+      - 'PigMasterAPI/**'
+      - '.github/workflows/pr-checks.yml'
+  push:
+    branches: [main, master]
+    paths:
+      - 'PigMasterAPI/**'
+      - '.github/workflows/pr-checks.yml'
+
+jobs:
+  lint:
+    name: ESLint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: PigMasterAPI
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: PigMasterAPI/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
+  test:
+    name: Jest tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: PigMasterAPI
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: PigMasterAPI/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run test suite
+        run: npm test -- --runInBand

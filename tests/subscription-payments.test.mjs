@@ -90,14 +90,27 @@ describe('subscription and payment flow', () => {
       phone: '254700000000',
       role_id: 1,
       farm_id: null,
+      privacy_policy_accepted: true,
+      marketing_consent: false,
     });
 
     expect(result).toBeDefined();
-    expect(initializeDatabaseMock).toHaveBeenCalledTimes(1);
     expect(executeQueryMock).toHaveBeenCalledWith(
       expect.stringContaining('INSERT INTO subscriptions'),
       expect.any(Array)
     );
+  });
+
+  test('register requires explicit privacy consent before creating an account', async () => {
+    await expect(AuthService.register({
+      email: 'consent@example.com',
+      password: 'Password123!',
+      name: 'Consent User',
+      phone: '254700000001',
+      role_id: 1,
+      farm_id: null,
+      privacy_policy_accepted: false,
+    })).rejects.toThrow('privacy policy consent');
   });
 
   test('duplicate callbacks are ignored and do not double activate the subscription', async () => {

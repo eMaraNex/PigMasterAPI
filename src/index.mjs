@@ -21,7 +21,6 @@ import feedingRoutes from "./routes/feeding.routes.js";
 import paymentRoutes from "./routes/payments.routes.js";
 import subscriptionRoutes from "./routes/subscriptions.routes.js";
 import { errorHandler } from "./middleware/errorHandler.js";
-import { runSetUp } from "./database/runSetup.js";
 import bodyParser from "body-parser";
 
 // Load environment variables
@@ -118,8 +117,6 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // API Documentation
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
-
-app.post("/migrate", runSetUp);
 
 // API Routes
 const apiRouter = express.Router();

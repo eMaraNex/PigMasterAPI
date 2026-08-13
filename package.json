@@ -7,8 +7,8 @@
   "scripts": {
     "start": "node --max-old-space-size=256 src/index.mjs",
     "dev": "nodemon --max-old-space-size=256 src/index.mjs",
-    "migrate": "node-pg-migrate up --migrations-dir src/database/migrations --migrations-table pgmigrations --config migrations-config.js",
-    "migrate:down": "node-pg-migrate down --migrations-dir src/database/migrations --migrations-table pgmigrations --config migrations-config.js",
+    "migrate": "node-pg-migrate up --migrations-dir src/database/migrations --migrations-table pgmigrations --migration-file-extension .js --config migrations-config.js",
+    "migrate:down": "node-pg-migrate down --migrations-dir src/database/migrations --migrations-table pgmigrations --migration-file-extension .js --config migrations-config.js",
     "seed": "node src/database/seed.js",
     "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --detectOpenHandles",
     "test:watch": "jest --watch",

@@ -9,7 +9,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const buildDatabaseUrl = () => {
   const host = process.env.DB_HOST || 'localhost';
   const port = process.env.DB_PORT || '5432';
-  const database = process.env.DB_NAME || 'pigmaster';
+  const database = process.env.DB_NAME || 'pigmasterdb';
   const user = process.env.DB_USER || 'postgres';
   const password = process.env.DB_PASSWORD || '';
   const sslmode = process.env.DB_SSLMODE || 'disable';
@@ -25,7 +25,7 @@ if (useLocalDbConfig) {
   process.env.DATABASE_URL = localDatabaseUrl;
   process.env.PGHOST = process.env.DB_HOST || 'localhost';
   process.env.PGPORT = String(process.env.DB_PORT || 5432);
-  process.env.PGDATABASE = process.env.DB_NAME || 'pigmaster';
+  process.env.PGDATABASE = process.env.DB_NAME || 'pigmasterdb';
   process.env.PGUSER = process.env.DB_USER || 'postgres';
   process.env.PGPASSWORD = process.env.DB_PASSWORD || '';
   process.env.PGSSLMODE = process.env.DB_SSLMODE || 'disable';

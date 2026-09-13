@@ -20,9 +20,15 @@ if (process.env.NODE_ENV === 'production') {
     dbConfig.password = process.env.DB_PASSWORD;
 }
 
-if (process.env.NODE_ENV !== 'production' && process.env.DATABASE_URL) {
-    console.error('Error: DATABASE_URL is set in development. This might connect to production. Please remove DATABASE_URL from your environment.');
+const hasLocalDbConfig = Boolean(process.env.DB_HOST || process.env.DB_NAME || process.env.DB_USER);
+
+if (process.env.NODE_ENV !== 'production' && process.env.DATABASE_URL && !hasLocalDbConfig) {
+    console.error('Error: DATABASE_URL is set in development without explicit local DB settings. Please remove DATABASE_URL or provide DB_HOST/DB_NAME/DB_USER.');
     process.exit(1);
+}
+
+if (process.env.NODE_ENV !== 'production' && process.env.DATABASE_URL && hasLocalDbConfig) {
+    console.log('Using local DB settings from DB_* environment variables in development; ignoring DATABASE_URL.');
 }
 
 dbConfig.max = 1; // Reduced for serverless

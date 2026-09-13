@@ -16,13 +16,17 @@ export const registerSchema = Joi.object({
     phone: Joi.string().max(20).optional().allow(null).messages({
         'string.max': 'Phone number cannot exceed 20 characters'
     }),
-    // role_id: Joi.number().integer().positive().required().messages({
-    //     'number.base': 'Role ID must be a number',
-    //     'number.positive': 'Role ID must be a positive number',
-    //     'any.required': 'Role ID is required'
-    // }),
+    privacy_policy_accepted: Joi.boolean().valid(true).required().messages({
+        'boolean.base': 'Privacy policy consent is required',
+        'any.only': 'You must accept the privacy policy to create an account',
+        'any.required': 'You must accept the privacy policy to create an account'
+    }),
+    marketing_consent: Joi.boolean().optional().default(false),
     farm_id: Joi.string().uuid().optional().allow(null).messages({
         'string.uuid': 'Farm ID must be a valid UUID'
+    }),
+    role_id: Joi.forbidden().messages({
+        'any.unknown': 'Role assignment is not allowed during self-registration'
     })
 }).strict();
 

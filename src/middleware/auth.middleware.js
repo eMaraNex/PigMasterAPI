@@ -2,6 +2,7 @@ import jwt from 'jsonwebtoken';
 import { pool } from '../config/database.js';
 import logger from './logger.js';
 import { UnauthorizedError } from './errors.js';
+import SubscriptionService from '../services/subscription.service.js';
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const parseTrialPeriod = () => {
@@ -60,6 +61,7 @@ const authMiddleware = async (req, res, next) => {
         const user = userResult.rows[0];
         const trialPeriodDays = parseTrialPeriod();
         const now = new Date();
+        await SubscriptionService.reconcileSubscription(user.id, now);
 
         let trialEndsAt = null;
         let isTrialActive = false;

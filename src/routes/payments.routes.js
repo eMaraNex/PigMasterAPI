@@ -7,13 +7,13 @@ import authMiddleware from '../middleware/auth.middleware.js';
 
 const router = express.Router();
 
+// ✅ Public webhook FIRST — before any /:paymentId routes
+router.post('/mpesa/callback', PaymentsController.mpesaCallback);
+
 // Protected routes
 router.post('/', authMiddleware, validateRequest(paymentSchema), PaymentsController.createPayment);
 router.get('/', authMiddleware, PaymentsController.getPayments);
 router.get('/:paymentId', authMiddleware, PaymentsController.getPaymentById);
 router.patch('/:paymentId/status', authMiddleware, PaymentsController.updatePaymentStatus);
-
-// Public webhook for M-Pesa callback
-router.post('/mpesa/callback', PaymentsController.mpesaCallback);
 
 export default router;

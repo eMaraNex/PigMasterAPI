@@ -100,7 +100,7 @@ const router = express.Router();
  *       409:
  *         description: Email already registered
  */
-router.post('/register', AuthController.register);
+router.post('/register', validateRequest(registerSchema), AuthController.register);
 
 /**
  * @swagger

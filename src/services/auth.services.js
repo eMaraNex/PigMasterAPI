@@ -5,6 +5,7 @@ import { DatabaseHelper } from '../config/database.js';
 import EmailService from './email.services.js';
 import logger from '../middleware/logger.js';
 import { ValidationError, NotFoundError, UnauthorizedError } from '../middleware/errors.js';
+import SubscriptionService from './subscription.service.js';
 
 class AuthService {
     static async register({
@@ -15,6 +16,8 @@ class AuthService {
         role_id,
         farm_id,
         currentUserRoleId,
+        privacy_policy_accepted,
+        marketing_consent = false,
         email_verified = false,
         is_active = 1,
         is_deleted = 0
@@ -44,15 +47,19 @@ class AuthService {
                 throw new ValidationError('Invalid email format');
             }
 
-            // Determine and validate role_id
-            let finalRoleId = role_id;
-            if (!role_id) {
-                // Assign default role_id if not provided (free tier)
-                const freeRoleResult = await this.getRoleIdByName('free');
-                if (!freeRoleResult) {
-                    throw new ValidationError('Default free role not found');
-                }
-                finalRoleId = freeRoleResult;
+            if (privacy_policy_accepted !== true) {
+                throw new ValidationError('You must accept the privacy policy consent to create an account');
+            }
+
+            // Self-registration must always start on the free tier; client supplied role IDs are ignored.
+            const freeRoleResult = await this.getRoleIdByName('free');
+            if (!freeRoleResult) {
+                throw new ValidationError('Default free role not found');
+            }
+            let finalRoleId = freeRoleResult;
+
+            if (currentUserRoleId && role_id) {
+                finalRoleId = role_id;
             }
 
             // Validate the role_id from the roles table
@@ -154,7 +161,12 @@ class AuthService {
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
                 RETURNING id, email, name, role_id, farm_id, email_verified, is_active, is_deleted, created_at`,
                 [userId, email, passwordHash, name, phone, finalRoleId, farm_id, email_verified, is_active, is_deleted,
-                    JSON.stringify({ verification_token: verificationToken, verification_expires: Date.now() + 24 * 3600 * 1000 })]
+                    JSON.stringify({
+                        verification_token: verificationToken,
+                        verification_expires: Date.now() + 24 * 3600 * 1000,
+                        privacy_policy_accepted: true,
+                        marketing_consent: Boolean(marketing_consent)
+                    })]
             );
 
             const newUser = userResult.rows[0];
@@ -178,6 +190,8 @@ class AuthService {
             } catch (emailError) {
                 logger.warn(`Email service error for ${email}: ${emailError.message}`);
             }
+
+            await SubscriptionService.createTrialSubscription(userId);
 
             // Log successful registration
             logger.info(`User registered successfully: ${email} with role_id ${finalRoleId}`);

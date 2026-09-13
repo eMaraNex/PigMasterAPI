@@ -46,9 +46,6 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           command_timeout: 10m
           script: |
-            export NVM_DIR="$HOME/.nvm"
-            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-            nvm use default
             cd ${{ steps.target.outputs.app_dir }}
             git fetch origin ${{ steps.target.outputs.branch }}
             git reset --hard origin/${{ steps.target.outputs.branch }}

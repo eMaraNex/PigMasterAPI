@@ -2,7 +2,6 @@ import { DatabaseHelper } from "../config/database.js";
 import logger from "../middleware/logger.js";
 import { ValidationError } from "../middleware/errors.js";
 import { v4 as uuidv4 } from "uuid";
-import { pool } from "../config/database.js";
 import AlertService from "./alerts.services.js";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
@@ -17,10 +16,6 @@ function getUTCDateString(date) {
 }
 
 // Utility function to get local date as YYYY-MM-DD (default Africa/Nairobi)
-function getLocalDateString(date, timezone = "Africa/Nairobi") {
-  return dayjs(date).tz(timezone).format("YYYY-MM-DD");
-}
-
 // Utility function to format date for display (default Africa/Nairobi)
 function formatLocalDate(date, timezone = "Africa/Nairobi") {
   return dayjs(date).tz(timezone).format("MMMM D, YYYY");
@@ -291,7 +286,7 @@ class BreedingService {
       return result.rows;
     } catch (error) {
       logger.error(
-        `Error fetching breeding record ${recordId}: ${error.message}`
+        `Error fetching breeding history for pig ${pigId}: ${error.message}`
       );
       throw error;
     }
@@ -726,7 +721,7 @@ class BreedingService {
         let birthHistoryId = birthHistoryResult.rows[0]?.id;
         if (!birthHistoryId) {
           birthHistoryId = uuidv4();
-          const newPigHistory = await DatabaseHelper.executeQuery(
+          await DatabaseHelper.executeQuery(
             `INSERT INTO pig_birth_history (
                        id, farm_id, sow_id, breeding_record_id, birth_date, number_of_piglets, notes, created_at, is_deleted
                      ) VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, 0)`,
@@ -824,8 +819,6 @@ class BreedingService {
       parent_male_id,
       parent_female_id,
       birth_weight,
-      gender,
-      color,
     } = updateData;
 
     try {

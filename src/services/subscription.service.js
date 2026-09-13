@@ -2,7 +2,6 @@ import { v4 as uuidv4 } from 'uuid';
 import { DatabaseHelper } from '../config/database.js';
 import logger from '../middleware/logger.js';
 import { ValidationError } from '../middleware/errors.js';
-import { pool } from '../config/database.js';
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const MONTH_IN_MS = 30 * DAY_IN_MS;

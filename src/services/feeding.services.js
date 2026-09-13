@@ -20,7 +20,9 @@ class FeedingService {
     if (row.pigs_in_pen && typeof row.pigs_in_pen === "string") {
       try {
         row.pigs_in_pen = JSON.parse(row.pigs_in_pen);
-      } catch (_) {}
+      } catch (parseError) {
+        void parseError;
+      }
     }
     if (row.total_amount != null)
       row.total_amount = parseFloat(row.total_amount);
@@ -519,8 +521,8 @@ class FeedingService {
         try {
           if (r.times && typeof r.times === "string")
             r.times = JSON.parse(r.times);
-        } catch (_) {
-          /* leave as-is */
+        } catch (parseError) {
+          void parseError;
         }
         return r;
       });

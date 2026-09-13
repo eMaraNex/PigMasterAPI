@@ -55,7 +55,7 @@ class PaymentsController {
     }
   }
 
-  static async mpesaCallback(req, res, next) {
+  static async mpesaCallback(req, res) {
     try {
       const callbackSecret = req.get('x-callback-secret') || req.get('x-mpesa-callback-secret');
       if (process.env.MPESA_CALLBACK_SECRET && callbackSecret !== process.env.MPESA_CALLBACK_SECRET) {

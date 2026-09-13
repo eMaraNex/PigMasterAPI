@@ -25,11 +25,6 @@ function getLocalDateString(date, timezone = "Africa/Nairobi") {
   return dayjs(date).tz(timezone).format("YYYY-MM-DD");
 }
 
-// Utility function to format date for display (default Africa/Nairobi)
-function formatLocalDate(date, timezone = "Africa/Nairobi") {
-  return dayjs(date).tz(timezone).format("MMMM D, YYYY");
-}
-
 class AlertService {
   constructor() {
     this.emailService = new EmailService();
@@ -224,7 +219,7 @@ class AlertService {
    */
   async processDueAlerts() {
     try {
-      const dueAlerts = await this.getDueAlerts(farmId);
+      const dueAlerts = await this.getDueAlerts();
       const results = [];
 
       for (const alert of dueAlerts) {

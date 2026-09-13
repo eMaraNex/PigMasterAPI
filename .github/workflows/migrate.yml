@@ -1,0 +1,53 @@
+name: Migrate API
+
+on:
+  push:
+    branches: [beta]
+    paths:
+      - 'src/database/migrations/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to run migrations against'
+        required: true
+        type: choice
+        options:
+          - beta
+          - production
+        default: beta
+
+concurrency:
+  group: api-migrate-${{ github.event.inputs.environment || 'beta' }}
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: Run migrations on VPS
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'beta' }}
+    timeout-minutes: 10
+    steps:
+      - name: Set target path and branch
+        id: target
+        run: |
+          if [ "${{ github.event.inputs.environment }}" = "production" ]; then
+            echo "branch=main" >> "$GITHUB_OUTPUT"
+            echo "app_dir=/var/www/PigMasterAPI" >> "$GITHUB_OUTPUT"
+          else
+            echo "branch=beta" >> "$GITHUB_OUTPUT"
+            echo "app_dir=/var/www/PigMasterAPIBeta" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: SSH migrate
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            cd ${{ steps.target.outputs.app_dir }}
+            git fetch origin ${{ steps.target.outputs.branch }}
+            git reset --hard origin/${{ steps.target.outputs.branch }}
+            npm ci
+            npm run migrate

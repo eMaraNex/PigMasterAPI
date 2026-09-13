@@ -49,7 +49,6 @@ class PigsService {
       }
 
       // Validate pen
-      let is_occupied = false;
       if (pen_id) {
         const penResult = await DatabaseHelper.executeQuery(
           "SELECT 1 FROM pens WHERE id = $1 AND farm_id = $2 AND is_deleted = 0",
@@ -66,7 +65,6 @@ class PigsService {
         if (parseInt(pigCount?.rows[0]?.count || 0) >= 6) {
           throw new ValidationError("Pen cannot have more than 6 pigs");
         }
-        is_occupied = true;
       }
 
       // // Validate parent IDs if provided
@@ -123,6 +121,7 @@ class PigsService {
       const pig = pigResult.rows[0];
 
       // Update pen is_occupied
+      const is_occupied = true;
       if (pen_id) {
         await DatabaseHelper.executeQuery(
           "UPDATE pens SET is_occupied = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND farm_id = $3",
@@ -268,7 +267,6 @@ class PigsService {
       );
       const pen_id = penDetails?.rows[0]?.pen_id;
       // Validate pen
-      let is_occupied = false;
       if (pen_id) {
         const penResult = await DatabaseHelper.executeQuery(
           "SELECT 1 FROM pens WHERE id = $1 AND farm_id = $2 AND is_deleted = 0",
@@ -285,7 +283,6 @@ class PigsService {
         if (parseInt(pigCount.rows[0].count) >= 6) {
           throw new ValidationError("Pen cannot have more than 6 pigs");
         }
-        is_occupied = true;
       }
 
       // // Validate parent IDs if provided
@@ -372,9 +369,7 @@ class PigsService {
       sale_weight,
       sold_to,
       sale_notes,
-      sale_type,
       pen_id,
-      currency,
     } = removalData;
     if (!reason) {
       throw new ValidationError("Removal reason is required");

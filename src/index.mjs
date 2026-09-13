@@ -158,7 +158,7 @@ app.use("*", (req, res) => {
 });
 
 // error handling middleware
-app.use((error, req, res, next) => {
+app.use((error, req, res, _next) => {
   logger.error(error.message);
   res.status(error.statusCode || 500).json({
     success: false,

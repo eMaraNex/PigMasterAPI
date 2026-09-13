@@ -60,7 +60,7 @@ class RateLimitError extends CustomError {
 /**
  * Error handler middleware
  */
-const errorHandler = (error, req, res, next) => {
+const errorHandler = (error, req, res, _next) => {
     const statusCode = error.statusCode || 500;
     const response = {
         success: false,

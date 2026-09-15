@@ -80,13 +80,17 @@ app.use(
   })
 );
 
+const corsOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(",").map((origin) => origin.trim())
+  : [
+    "https://pigmaster.emaranex.com",
+    "http://localhost:3000",
+    "https://pigmaster.vercel.app",
+  ];
+
 app.use(
   cors({
-    origin: [
-      "https://pigmaster.emaranex.com",
-      "http://localhost:3000",
-      "https://pigmaster.vercel.app",
-    ],
+    origin: corsOrigins,
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],

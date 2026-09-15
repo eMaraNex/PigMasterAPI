@@ -121,8 +121,6 @@ class RowsService {
 
       const currentRow = rowResult.rows[0];
       const newCapacity = currentRow.capacity + additionalCapacity;
-      const currentLevels = currentRow.levels || ["A", "B", "C"];
-
       // Update row capacity
       const updatedRowResult = await DatabaseHelper.executeQuery(
         "UPDATE rows SET capacity = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND farm_id = $3 AND is_deleted = 0 RETURNING *",

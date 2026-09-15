@@ -55,14 +55,22 @@ class PaymentsController {
     }
   }
 
-  static async mpesaCallback(req, res, next) {
+  static async mpesaCallback(req, res) {
     try {
+      const callbackSecret = req.get('x-callback-secret') || req.get('x-mpesa-callback-secret');
+      if (process.env.MPESA_CALLBACK_SECRET && callbackSecret !== process.env.MPESA_CALLBACK_SECRET) {
+        return res.status(401).json({ ResultCode: 1, ResultDesc: 'Unauthorized' });
+      }
+
       const callbackData = req.body;
-      await PaymentService.handleMpesaCallback(callbackData);
-      res.status(200).json({ ResultCode: 0, ResultDesc: 'Accepted' });
+      const result = await PaymentService.handleMpesaCallback(callbackData);
+      return res.status(200).json({
+        ResultCode: result.success ? 0 : 1,
+        ResultDesc: result.success ? 'Accepted' : result.message || 'Rejected',
+      });
     } catch (error) {
       logger.error(`M-Pesa callback error: ${error.message}`);
-      res.status(500).json({ ResultCode: 1, ResultDesc: 'Failed' });
+      return res.status(500).json({ ResultCode: 1, ResultDesc: 'Failed' });
     }
   }
 }

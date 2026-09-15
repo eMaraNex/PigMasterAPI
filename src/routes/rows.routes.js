@@ -1,11 +1,5 @@
 import express from "express";
 import RowsController from "../controllers/rows.controllers.js";
-import { validateRequest } from "../middleware/validateRequest.js";
-import {
-  rowSchema,
-  rowUpdateSchema,
-  rowExpandSchema,
-} from "../utils/validator.js";
 import authMiddleware from "../middleware/auth.middleware.js";
 import { requireActiveSubscription } from "../middleware/subscription.middleware.js";
 

@@ -6,7 +6,7 @@ import logger from '../middleware/logger.js';
 dotenv.config();
 
 class CardService {
-  static async processPayment(cardDetails, amount, currency, reference, description) {
+  static async processPayment() {
     // In real implementation, integrate with Stripe or other card processor
     // For example, using Stripe SDK: const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
     // Then create payment intent: await stripe.paymentIntents.create({ amount, currency, ... });
@@ -22,7 +22,7 @@ class CardService {
   }
 
   // Future methods, e.g., for refunds, subscriptions, etc.
-  static async refundPayment(transactionId, amount) {
+  static async refundPayment() {
     // Implement refund logic
     throw new Error('Refund method not implemented yet');
   }

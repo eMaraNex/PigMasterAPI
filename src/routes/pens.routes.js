@@ -2,7 +2,7 @@ import express from "express";
 import PensController from "../controllers/pens.controllers.js";
 // import authMiddleware from '../middleware/auth.js';
 import { validateRequest } from "../middleware/validateRequest.js";
-import { penSchema, penUpdateSchema } from "../utils/validator.js";
+import { penUpdateSchema } from "../utils/validator.js";
 import authMiddleware from "../middleware/auth.middleware.js";
 import { requireActiveSubscription } from "../middleware/subscription.middleware.js";
 

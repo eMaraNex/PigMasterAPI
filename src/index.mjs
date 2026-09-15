@@ -19,8 +19,8 @@ import alertRoutes from "./routes/alerts.routes.js";
 import healthRoutes from "./routes/health.routes.js";
 import feedingRoutes from "./routes/feeding.routes.js";
 import paymentRoutes from "./routes/payments.routes.js";
+import subscriptionRoutes from "./routes/subscriptions.routes.js";
 import { errorHandler } from "./middleware/errorHandler.js";
-import { runSetUp } from "./database/runSetup.js";
 import bodyParser from "body-parser";
 
 // Load environment variables
@@ -118,8 +118,6 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 // API Documentation
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
-app.post("/migrate", runSetUp);
-
 // API Routes
 const apiRouter = express.Router();
 
@@ -137,6 +135,7 @@ apiRouter.use("/alerts", alertRoutes);
 apiRouter.use("/health", healthRoutes);
 apiRouter.use("/feeding", feedingRoutes);
 apiRouter.use("/payments", paymentRoutes);
+apiRouter.use("/subscriptions", subscriptionRoutes);
 
 app.use("/api/v1", apiRouter);
 
@@ -159,7 +158,7 @@ app.use("*", (req, res) => {
 });
 
 // error handling middleware
-app.use((error, req, res, next) => {
+app.use((error, req, res, _next) => {
   logger.error(error.message);
   res.status(error.statusCode || 500).json({
     success: false,

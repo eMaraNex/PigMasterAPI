@@ -1,0 +1,44 @@
+name: Deploy API — Live (main)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: api-deploy-live
+  cancel-in-progress: false
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+
+  deploy:
+    name: Deploy to VPS
+    needs: lint
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 15
+    steps:
+      - name: SSH deploy
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          command_timeout: 15m
+          script: |
+            cd /var/www/PigMasterAPI
+            git fetch origin main
+            git reset --hard origin/main
+            npm ci
+            pm2 restart pigmasterapi --update-env
+            pm2 save

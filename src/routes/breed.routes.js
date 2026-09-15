@@ -6,7 +6,6 @@ import { validateRequest } from "../middleware/validateRequest.js";
 import {
   breedingSchema,
   breedingUpdateSchema,
-  pigletSchema,
   pigletUpdateSchema,
 } from "../utils/validator.js";
 

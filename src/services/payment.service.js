@@ -6,13 +6,14 @@ import { v4 as uuidv4 } from 'uuid';
 import dotenv from 'dotenv';
 import MpesaService from './mpesa.services.js';
 import CardService from './card.services.js';
+import SubscriptionService from './subscription.service.js';
 
 dotenv.config();
 
 class PaymentService {
   static async createPayment(paymentData, userId, farmId = null) {
     const { plan, amount, payment_mode, phone_number, currency, metadata = {}, tier } = paymentData;
-    
+
     if (!plan || !amount || !payment_mode || !currency) {
       throw new ValidationError('Plan, amount, payment_mode, and currency are required');
     }
@@ -21,7 +22,7 @@ class PaymentService {
     let finalAmount = amount;
     let finalCurrency = currency;
     const validModes = ['mpesa', 'dpogroup', 'card', 'stripe', 'paypal'];
-    
+
     if (!validModes.includes(payment_mode)) {
       throw new ValidationError(`Invalid payment mode: ${payment_mode}`);
     }
@@ -53,22 +54,24 @@ class PaymentService {
         const result = await DatabaseHelper.executeQuery(
           `INSERT INTO payments (
             id, user_id, farm_id, plan, amount, currency, payment_mode, phone_number,
-            transaction_id, status, metadata, created_at, updated_at, is_deleted, is_active
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 1)
+            transaction_id, checkout_request_id, merchant_request_id, status, metadata, created_at, updated_at, is_deleted, is_active
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 1)
           RETURNING *`,
           [
             paymentId,
             userId,
             farmId,
             plan,
-            finalAmount, 
+            finalAmount,
             finalCurrency,
             payment_mode,
             phone_number || null,
             transactionId,
-            'pending', // Temporary pending record
-            JSON.stringify({ 
-              ...metadata, 
+            transactionId,
+            null,
+            'pending',
+            JSON.stringify({
+              ...metadata,
               initiated_at: new Date().toISOString(),
               tier: tier || plan
             })
@@ -76,19 +79,19 @@ class PaymentService {
         );
 
         logger.info(`M-Pesa STK Push initiated for payment ${paymentId}. Awaiting callback confirmation.`);
-        
+
         // Return pending payment - DO NOT upgrade user yet
-        return { 
-          ...result.rows[0], 
+        return {
+          ...result.rows[0],
           message: 'Payment initiated. Please complete the payment on your phone.',
-          stk_push_response: transactionId 
+          stk_push_response: transactionId
         };
 
       } else if (payment_mode === 'card' || payment_mode === 'stripe') {
         if (!metadata.card_details) {
           throw new ValidationError('Card details are required for card/stripe payment');
         }
-        
+
         // Process card payment synchronously
         transactionId = await CardService.processPayment(
           metadata.card_details,
@@ -97,28 +100,30 @@ class PaymentService {
           `Payment_${paymentId}`,
           `Subscription for ${tier || plan}`
         );
-        
+
         status = 'success'; // Card payments are immediate
 
         const result = await DatabaseHelper.executeQuery(
           `INSERT INTO payments (
             id, user_id, farm_id, plan, amount, currency, payment_mode, phone_number,
-            transaction_id, status, metadata, created_at, updated_at, is_deleted, is_active
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 1)
+            transaction_id, checkout_request_id, merchant_request_id, status, metadata, created_at, updated_at, is_deleted, is_active
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 1)
           RETURNING *`,
           [
             paymentId,
             userId,
             farmId,
             plan,
-            finalAmount, 
+            finalAmount,
             finalCurrency,
             payment_mode,
             phone_number || null,
             transactionId,
+            transactionId,
+            null,
             status,
-            JSON.stringify({ 
-              ...metadata, 
+            JSON.stringify({
+              ...metadata,
               initiated_at: new Date().toISOString(),
               tier: tier || plan
             })
@@ -130,10 +135,10 @@ class PaymentService {
           await this.upgradeUserTier(userId, plan, metadata);
         }
 
-        return { 
-          ...result.rows[0], 
+        return {
+          ...result.rows[0],
           message: 'Payment successful',
-          stk_push_response: transactionId 
+          stk_push_response: transactionId
         };
 
       } else {
@@ -144,22 +149,24 @@ class PaymentService {
         const result = await DatabaseHelper.executeQuery(
           `INSERT INTO payments (
             id, user_id, farm_id, plan, amount, currency, payment_mode, phone_number,
-            transaction_id, status, metadata, created_at, updated_at, is_deleted, is_active
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 1)
+            transaction_id, checkout_request_id, merchant_request_id, status, metadata, created_at, updated_at, is_deleted, is_active
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 1)
           RETURNING *`,
           [
             paymentId,
             userId,
             farmId,
             plan,
-            finalAmount, 
+            finalAmount,
             finalCurrency,
             payment_mode,
             phone_number || null,
             transactionId,
+            transactionId,
+            null,
             status,
-            JSON.stringify({ 
-              ...metadata, 
+            JSON.stringify({
+              ...metadata,
               initiated_at: new Date().toISOString(),
               tier: tier || plan
             })
@@ -170,10 +177,10 @@ class PaymentService {
           await this.upgradeUserTier(userId, plan, metadata);
         }
 
-        return { 
-          ...result.rows[0], 
+        return {
+          ...result.rows[0],
           message: 'Payment successful',
-          stk_push_response: transactionId 
+          stk_push_response: transactionId
         };
       }
     } catch (error) {
@@ -232,95 +239,163 @@ class PaymentService {
     }
   }
 
-  static async handleMpesaCallback(callbackData) {
-    try {
-      logger.info(`Received M-Pesa callback: ${JSON.stringify(callbackData)}`);
-      
-      const processed = MpesaService.processCallback(callbackData);
-      const transactionId = processed.checkoutRequestID;
+static async handleMpesaCallback(callbackData) {
+  try {
+    logger.info(`Received M-Pesa callback: ${JSON.stringify(callbackData)}`);
 
-      // Find the pending payment
-      const payment = await DatabaseHelper.executeQuery(
-        'SELECT * FROM payments WHERE transaction_id = $1 AND is_deleted = 0 AND status = \'pending\'',
+    const processed = MpesaService.processCallback(callbackData);
+    const transactionId = processed.checkoutRequestID;
+
+    if (!transactionId) {
+      return { success: false, message: 'Invalid callback payload' };
+    }
+
+    const connection = await DatabaseHelper.getConnection();
+    let paymentRecord = null;
+
+    try {
+      await connection.query('BEGIN');
+
+      const paymentResult = await connection.query(
+        `SELECT * FROM payments 
+         WHERE checkout_request_id = $1 AND is_deleted = 0 
+         ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
         [transactionId]
       );
 
-      if (payment.rows.length === 0) {
-        logger.warn(`No pending payment found for transaction ${transactionId}`);
-        return { success: false, message: 'Payment not found' };
+      if (paymentResult.rows.length === 0) {
+        logger.warn(`No payment found for transaction ${transactionId}`);
+        await connection.query('ROLLBACK');
+        return { success: false, message: 'Unknown checkout request' };
       }
 
-      const paymentRecord = payment.rows[0];
+      paymentRecord = paymentResult.rows[0];
 
-      if (processed.success) {
-        // Verify amount and phone number for security
-        if (Number(processed.amount) !== Number(paymentRecord.amount) || Number(processed.phoneNumber) !==  Number(paymentRecord.phone_number)) {
-          logger.error(`Data mismatch in callback for payment ${paymentRecord.id}: amount ${processed.amount} vs ${paymentRecord.amount}, phone ${processed.phoneNumber} vs ${paymentRecord.phone_number}`);
-          return { success: false, message: 'Data mismatch in callback' };
-        }
+      if (paymentRecord.status !== 'pending') {
+        logger.info(`Callback ignored for already processed payment ${paymentRecord.id}`);
+        await connection.query('COMMIT');
+        return { success: false, message: 'Payment already processed' };
+      }
 
-        // Update payment status to success and add metadata
-        const mpesaMetadata = {
-          mpesa_receipt: processed.mpesaReceiptNumber,
-          confirmed_amount: processed.amount,
-          transaction_date: processed.transactionDate,
-          phone_number: processed.phoneNumber
-        };
+      const callbackPayload = {
+        ...callbackData,
+        processed_at: new Date().toISOString(),
+      };
 
-        const updatedPayment = await DatabaseHelper.executeQuery(
+      if (!processed.success) {
+        await connection.query(
+          `UPDATE payments
+           SET status = 'failed',
+               metadata = metadata || $1::jsonb,
+               callback_payload = $2::jsonb,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $3`,
+          [
+            JSON.stringify({ callback_error: processed.resultDesc || 'Payment failed' }),
+            JSON.stringify(callbackPayload),
+            paymentRecord.id,
+          ]
+        );
+        await connection.query('COMMIT');
+        return { success: false, message: 'Payment failed', reason: processed.resultDesc };
+      }
+
+      // Validate amount and phone
+      const normalize = (p) => String(p ?? '').replace(/\D/g, '').slice(-9);
+      const phoneMatch = normalize(processed.phoneNumber) === normalize(paymentRecord.phone_number);
+      const amountMatch = Math.abs(Number(processed.amount) - Number(paymentRecord.amount)) <= 1;
+
+      if (!phoneMatch || !amountMatch) {
+        logger.error(`Data mismatch in callback for payment ${paymentRecord.id}`);
+        await connection.query(
           `UPDATE payments 
-           SET status = $1, 
-               metadata = metadata || $2::jsonb,
+           SET status = 'failed', 
+               metadata = metadata || $1::jsonb, 
+               callback_payload = $2::jsonb, 
                updated_at = CURRENT_TIMESTAMP 
-           WHERE id = $3 
-           RETURNING *`,
-          ['success', JSON.stringify(mpesaMetadata), paymentRecord.id]
+           WHERE id = $3`,
+          [
+            JSON.stringify({ callback_error: 'Data mismatch in callback' }),
+            JSON.stringify(callbackPayload),
+            paymentRecord.id,
+          ]
         );
-
-        logger.info(`Payment ${paymentRecord.id} confirmed successfully via M-Pesa`);
-
-        // NOW upgrade user tier after confirmation
-        try {
-          const fullMetadata = { ...paymentRecord.metadata || {}, ...mpesaMetadata };
-          await this.upgradeUserTier(paymentRecord.user_id, paymentRecord.plan, fullMetadata);
-          logger.info(`User ${paymentRecord.user_id} upgraded to ${paymentRecord.plan} after successful M-Pesa payment`);
-        } catch (upgradeError) {
-          logger.error(`Failed to upgrade user ${paymentRecord.user_id} after payment: ${upgradeError.message}`);
-          // Payment is successful but upgrade failed - mark for manual review
-          await DatabaseHelper.executeQuery(
-            `UPDATE payments 
-             SET metadata = metadata || $1::jsonb
-             WHERE id = $2`,
-            [JSON.stringify({ upgrade_error: upgradeError.message }), paymentRecord.id]
-          );
-        }
-
-        return { 
-          success: true, 
-          message: 'Payment confirmed and user upgraded',
-          payment: updatedPayment.rows[0]
-        };
-
-      } else {
-        // Payment failed or cancelled - DELETE the pending record (no failed records kept)
-        await DatabaseHelper.executeQuery(
-          `DELETE FROM payments WHERE id = $1`,
-          [paymentRecord.id]
-        );
-
-        logger.warn(`Payment initiation ${paymentRecord.id} failed or cancelled: ${processed.resultDesc}. Record deleted.`);
-
-        return { 
-          success: false, 
-          message: 'Payment failed or cancelled',
-          reason: processed.resultDesc 
-        };
+        await connection.query('COMMIT');
+        return { success: false, message: 'Data mismatch in callback' };
       }
+
+      // Mark payment success — do this inside the transaction
+      const mpesaMetadata = {
+        mpesa_receipt: processed.mpesaReceiptNumber,
+        confirmed_amount: processed.amount,
+        transaction_date: processed.transactionDate,
+        phone_number: processed.phoneNumber,
+        result_desc: processed.resultDesc,
+      };
+
+      await connection.query(
+        `UPDATE payments
+         SET status = 'success',
+             metadata = metadata || $1::jsonb,
+             callback_payload = $2::jsonb,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $3`,
+        [JSON.stringify(mpesaMetadata), JSON.stringify(callbackPayload), paymentRecord.id]
+      );
+
+      await connection.query('COMMIT');
     } catch (error) {
-      logger.error(`Error handling M-Pesa callback: ${error.message}`);
+      await connection.query('ROLLBACK');
       throw error;
+    } finally {
+      // ✅ Always release the connection before doing subscription work
+      if (connection && typeof connection.release === 'function') {
+        connection.release();
+      }
     }
+
+    // ✅ Activate subscription AFTER releasing the DB connection
+    // This uses a fresh connection from the pool, avoiding timeout
+    try {
+      await SubscriptionService.activatePaidSubscription(
+        paymentRecord.user_id,
+        paymentRecord.plan,
+        { startDate: new Date(), expiryDate: null }
+        // No client passed — gets its own fresh connection
+      );
+      logger.info(`Subscription activated for user ${paymentRecord.user_id}, payment ${paymentRecord.id}`);
+    } catch (activationError) {
+      // Payment is already marked success — log but don't fail the callback
+      // A separate reconciliation job can fix subscriptions that didn't activate
+      logger.error(`Subscription activation failed for payment ${paymentRecord.id}: ${activationError.message}`);
+
+      // Mark the activation error in metadata so you can find and fix it
+      await DatabaseHelper.executeQuery(
+        `UPDATE payments 
+         SET metadata = metadata || $1::jsonb, updated_at = CURRENT_TIMESTAMP 
+         WHERE id = $2`,
+        [JSON.stringify({ activation_error: activationError.message, needs_manual_activation: true }), paymentRecord.id]
+      );
+
+      // Still return success to Safaricom — they already took the money
+      return {
+        success: true,
+        message: 'Payment confirmed, subscription activation pending',
+        payment: { ...paymentRecord, status: 'success' },
+      };
+    }
+
+    return {
+      success: true,
+      message: 'Payment confirmed and subscription activated',
+      payment: { ...paymentRecord, status: 'success' },
+    };
+
+  } catch (error) {
+    logger.error(`Error handling M-Pesa callback: ${error.message}`);
+    throw error;
   }
+}
 
   static async getPaymentsByUser(userId, farmId = null, limit = 50, offset = 0) {
     try {
@@ -346,92 +421,147 @@ class PaymentService {
     }
   }
 
-  static async getPaymentById(paymentId, userId) {
-    try {
-      const result = await DatabaseHelper.executeQuery(
-        'SELECT * FROM payments WHERE id = $1 AND user_id = $2 AND is_deleted = 0',
-        [paymentId, userId]
-      );
-      if (result.rows.length === 0) {
-        throw new ValidationError('Payment not found');
-      }
-      return result.rows[0];
-    } catch (error) {
-      logger.error(`Error fetching payment ${paymentId}: ${error.message}`);
-      throw error;
+// payment.service.js
+static async getPaymentById(paymentId, userId) {
+  try {
+    const result = await DatabaseHelper.executeQuery(
+      // Remove any status filter — polling needs to see pending AND success AND failed
+      'SELECT * FROM payments WHERE id = $1 AND user_id = $2 AND is_deleted = 0',
+      [paymentId, userId]
+    );
+    if (result.rows.length === 0) {
+      throw new ValidationError('Payment not found');
     }
+    return result.rows[0];
+  } catch (error) {
+    logger.error(`Error fetching payment ${paymentId}: ${error.message}`);
+    throw error;
   }
+}
 
   static async checkPaymentStatus(paymentId, userId) {
     try {
       const payment = await this.getPaymentById(paymentId, userId);
-      
-      // If not pending, return as is
+
+      // Not pending or not M-Pesa — return as-is, nothing to query
       if (payment.status !== 'pending' || payment.payment_mode !== 'mpesa' || !payment.transaction_id) {
         return payment;
       }
 
-      // Query M-Pesa API for pending M-Pesa payments
+      let mpesaStatus;
       try {
-        const mpesaStatus = await MpesaService.querySTKPush(payment.transaction_id);
+        mpesaStatus = await MpesaService.querySTKPush(payment.transaction_id);
         logger.info(`M-Pesa status check for ${paymentId}: ${JSON.stringify(mpesaStatus)}`);
-        
-        // Check query success (ResponseCode '0')
-        if (mpesaStatus.ResponseCode !== '0') {
-          throw new Error(`Query failed: ${mpesaStatus.ResponseDescription || 'Unknown error'}`);
-        }
-
-        // Check transaction result (ResultCode '0' for success)
-        if (mpesaStatus.ResultCode === '0') {
-          // Extract metadata
-          const callbackMetadata = mpesaStatus.CallbackMetadata?.Item || [];
-          const amount = callbackMetadata.find(item => item.Name === 'Amount')?.Value;
-          const mpesaReceiptNumber = callbackMetadata.find(item => item.Name === 'MpesaReceiptNumber')?.Value;
-          const transactionDate = callbackMetadata.find(item => item.Name === 'TransactionDate')?.Value;
-          const phoneNumber = callbackMetadata.find(item => item.Name === 'PhoneNumber')?.Value;
-
-          // Verify amount and phone for security
-          if (amount !== payment.amount || String(phoneNumber) !== payment.phone_number) {
-            logger.error(`Data mismatch in query for payment ${paymentId}: amount ${amount} vs ${payment.amount}, phone ${phoneNumber} vs ${payment.phone_number}`);
-            throw new Error('Data mismatch in query response');
-          }
-
-          // Update to success with metadata
-          const mpesaMetadata = {
-            mpesa_receipt: mpesaReceiptNumber,
-            confirmed_amount: amount,
-            transaction_date: transactionDate,
-            phone_number: phoneNumber
-          };
-
-          const updatedPayment = await DatabaseHelper.executeQuery(
-            `UPDATE payments 
-             SET status = $1, 
-                 metadata = metadata || $2::jsonb,
-                 updated_at = CURRENT_TIMESTAMP 
-             WHERE id = $3 
-             RETURNING *`,
-            ['success', JSON.stringify(mpesaMetadata), paymentId]
-          );
-
-          // Upgrade user
-          const fullMetadata = { ...payment.metadata || {}, ...mpesaMetadata };
-          await this.upgradeUserTier(payment.user_id, payment.plan, fullMetadata);
-
-          return updatedPayment.rows[0];
-        } else {
-          // Failure (e.g., ResultCode '1032' for cancel, or others)
-          await DatabaseHelper.executeQuery(
-            `DELETE FROM payments WHERE id = $1`,
-            [paymentId]
-          );
-          throw new ValidationError(`Payment failed: ${mpesaStatus.ResultDesc || 'Unknown error'}`);
-        }
       } catch (queryError) {
-        logger.warn(`Could not query M-Pesa status for ${paymentId}: ${queryError.message}`);
-        // Assume still pending if query fails (e.g., transaction processing)
+        // Network/timeout error reaching Safaricom — treat as still pending
+        logger.warn(`Could not reach M-Pesa for ${paymentId}: ${queryError.message}`);
         return payment;
       }
+
+      // Safaricom couldn't process the query itself (not the transaction result)
+      if (mpesaStatus.ResponseCode !== '0') {
+        logger.warn(`STK query returned non-zero ResponseCode for ${paymentId}: ${mpesaStatus.ResponseDescription}`);
+        return payment; // Still pending — query may succeed on next poll
+      }
+
+      const resultCode = String(mpesaStatus.ResultCode ?? '');
+
+      // ── SUCCESS ──────────────────────────────────────────────
+      if (resultCode === '0') {
+        const items = mpesaStatus.CallbackMetadata?.Item || [];
+        const find = (name) => items.find((i) => i.Name === name)?.Value;
+
+        const confirmedAmount = find('Amount');
+        const mpesaReceipt = find('MpesaReceiptNumber');
+        const transactionDate = find('TransactionDate');
+        const confirmedPhone = find('PhoneNumber');
+
+        // Normalize phones for comparison: strip all non-digits, compare last 9 digits
+        const normalize = (p) => String(p ?? '').replace(/\D/g, '').slice(-9);
+        const phoneMatch = normalize(confirmedPhone) === normalize(payment.phone_number);
+
+        // Normalize amounts: both to float, allow ±1 rounding tolerance
+        const amountMatch = Math.abs(parseFloat(confirmedAmount) - parseFloat(payment.amount)) <= 1;
+
+        if (!phoneMatch || !amountMatch) {
+          logger.error(
+            `Security mismatch for payment ${paymentId}: ` +
+            `amount [${confirmedAmount} vs ${payment.amount}] ` +
+            `phone [${confirmedPhone} vs ${payment.phone_number}]`
+          );
+          // Mark failed — do NOT upgrade
+          await DatabaseHelper.executeQuery(
+            `UPDATE payments
+           SET status = 'failed',
+               metadata = metadata || $1::jsonb,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $2`,
+            [JSON.stringify({ failure_reason: 'amount_or_phone_mismatch' }), paymentId]
+          );
+          throw new ValidationError('Payment data mismatch — contact support');
+        }
+
+        // Build dates for subscription activation
+        const existingMeta = payment.metadata || {};
+        const startDate = new Date();
+        const endDate = new Date(startDate);
+        const period = existingMeta.plan_period || 'monthly';
+        if (period === 'yearly') {
+          endDate.setFullYear(endDate.getFullYear() + 1);
+        } else {
+          endDate.setMonth(endDate.getMonth() + 1);
+        }
+
+        const mpesaMetadata = {
+          mpesa_receipt: mpesaReceipt,
+          confirmed_amount: confirmedAmount,
+          transaction_date: transactionDate,
+          phone_number: confirmedPhone,
+        };
+
+        const updatedPayment = await DatabaseHelper.executeQuery(
+          `UPDATE payments
+         SET status = 'success',
+             metadata = metadata || $1::jsonb,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $2
+         RETURNING *`,
+          [JSON.stringify(mpesaMetadata), paymentId]
+        );
+
+        // upgradeUserTier needs subscription dates in metadata
+        const fullMetadata = {
+          ...existingMeta,
+          ...mpesaMetadata,
+          subscription_startdate: startDate.toISOString().split('T')[0],
+          subscription_enddate: endDate.toISOString().split('T')[0],
+        };
+
+        await this.upgradeUserTier(payment.user_id, payment.plan, fullMetadata);
+        logger.info(`Payment ${paymentId} confirmed via STK query and user upgraded`);
+        return updatedPayment.rows[0];
+      }
+
+      // ── FAILURE (user cancelled, wrong PIN, timeout, etc.) ───
+      // ResultCode 1032 = cancelled, 1037 = timeout, 2001 = wrong PIN, etc.
+      logger.warn(`Payment ${paymentId} failed with ResultCode ${resultCode}: ${mpesaStatus.ResultDesc}`);
+      const failedPayment = await DatabaseHelper.executeQuery(
+        `UPDATE payments
+       SET status = 'failed',
+           metadata = metadata || $1::jsonb,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2
+       RETURNING *`,
+        [
+          JSON.stringify({
+            failure_reason: mpesaStatus.ResultDesc || 'Payment failed',
+            result_code: resultCode,
+          }),
+          paymentId,
+        ]
+      );
+      return failedPayment.rows[0]; // Return it so frontend sees status: 'failed'
+
     } catch (error) {
       logger.error(`Error checking payment status ${paymentId}: ${error.message}`);
       throw error;
@@ -447,11 +577,11 @@ class PaymentService {
          RETURNING *`,
         [status, JSON.stringify(metadata), paymentId, userId]
       );
-      
+
       if (result.rows.length === 0) {
         throw new ValidationError('Payment not found or unauthorized');
       }
-      
+
       return result.rows[0];
     } catch (error) {
       logger.error(`Error updating payment ${paymentId}: ${error.message}`);

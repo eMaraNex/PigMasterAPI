@@ -20,6 +20,9 @@ import healthRoutes from "./routes/health.routes.js";
 import feedingRoutes from "./routes/feeding.routes.js";
 import paymentRoutes from "./routes/payments.routes.js";
 import subscriptionRoutes from "./routes/subscriptions.routes.js";
+import adminRoutes from "./routes/admin.routes.js";
+import cron from "node-cron";
+import AdminService from "./services/admin.service.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import bodyParser from "body-parser";
 
@@ -140,6 +143,7 @@ apiRouter.use("/health", healthRoutes);
 apiRouter.use("/feeding", feedingRoutes);
 apiRouter.use("/payments", paymentRoutes);
 apiRouter.use("/subscriptions", subscriptionRoutes);
+apiRouter.use("/admin", adminRoutes);
 
 app.use("/api/v1", apiRouter);
 
@@ -178,6 +182,15 @@ app.use(errorHandler);
 async function startServer() {
   try {
     logger.info("Starting Pig Farm Management Server...");
+    const refreshAnalytics = async () => {
+      try {
+        await AdminService.refreshDailyRollup();
+      } catch (error) {
+        logger.error(`Analytics rollup refresh failed: ${error.message}`);
+      }
+    };
+    await refreshAnalytics();
+    cron.schedule("*/15 * * * *", refreshAnalytics);
     // Start server
     app.listen(PORT, () => {
       logger.info(`🚀 Server running on port ${PORT}`);

@@ -5,12 +5,47 @@ import { ValidationError } from '../middleware/errors.js';
 import { v4 as uuidv4 } from 'uuid';
 import dotenv from 'dotenv';
 import MpesaService from './mpesa.services.js';
-import CardService from './card.services.js';
 import SubscriptionService from './subscription.service.js';
 
 dotenv.config();
 
 class PaymentService {
+  static async quotePayment(planName, planPeriod = 'monthly') {
+    if (!['monthly', 'yearly'].includes(planPeriod)) {
+      throw new ValidationError('Billing period must be monthly or yearly');
+    }
+    const result = await DatabaseHelper.executeQuery(
+      `SELECT name, price, currency, duration_months
+       FROM subscription_plans WHERE name = $1 AND is_active = 1 LIMIT 1`,
+      [planName]
+    );
+    const plan = result.rows[0];
+    if (!plan || plan.name === 'free') throw new ValidationError('Paid subscription plan not found');
+    const durationMonths = Math.max(1, Number(plan.duration_months) || 1)
+      * (planPeriod === 'yearly' ? 12 : 1);
+    // Keep the existing 16% annual offer but calculate it on the server from the plan table price.
+    const amountInPlanCurrency = Number(plan.price) * durationMonths
+      * (planPeriod === 'yearly' ? 0.84 : 1);
+    let amount = amountInPlanCurrency;
+    let currency = plan.currency;
+    if (plan.currency !== 'KES') {
+      // M-Pesa needs KES; use an owner-configured server rate, never the client display conversion.
+      if (plan.currency !== 'USD' || !Number.isFinite(Number(process.env.USD_TO_KES_RATE))
+        || Number(process.env.USD_TO_KES_RATE) <= 0) {
+        throw new ValidationError('A valid server-side USD_TO_KES_RATE is required to quote M-Pesa in KES');
+      }
+      amount = amountInPlanCurrency * Number(process.env.USD_TO_KES_RATE);
+      currency = 'KES';
+    }
+    return {
+      plan: plan.name,
+      planPeriod,
+      durationMonths,
+      amount: Math.round(amount),
+      currency,
+    };
+  }
+
   static async createPayment(paymentData, userId, farmId = null) {
     const { plan, amount, payment_mode, phone_number, currency, metadata = {}, tier } = paymentData;
 
@@ -18,17 +53,21 @@ class PaymentService {
       throw new ValidationError('Plan, amount, payment_mode, and currency are required');
     }
 
-    const paymentId = uuidv4();
-    let finalAmount = amount;
-    let finalCurrency = currency;
-    const validModes = ['mpesa', 'dpogroup', 'card', 'stripe', 'paypal'];
-
-    if (!validModes.includes(payment_mode)) {
-      throw new ValidationError(`Invalid payment mode: ${payment_mode}`);
+    // Provider-specific completion is required; simulated modes must not mark a charge paid.
+    if (payment_mode !== 'mpesa') {
+      throw new ValidationError(`Payment mode ${payment_mode} is not currently supported`);
     }
 
+    const planPeriod = metadata.plan_period || 'monthly';
+    const quote = await this.quotePayment(plan, planPeriod);
+    if (currency !== quote.currency || Math.round(Number(amount)) !== quote.amount) {
+      throw new ValidationError('Payment amount or currency does not match the current server-side plan price');
+    }
+
+    const paymentId = uuidv4();
+    const finalAmount = quote.amount;
+    const finalCurrency = quote.currency;
     let transactionId = null;
-    let status = 'pending';
 
     try {
       // Handle different payment modes
@@ -71,9 +110,10 @@ class PaymentService {
             null,
             'pending',
             JSON.stringify({
-              ...metadata,
+              plan_period: quote.planPeriod,
+              duration_months: quote.durationMonths,
               initiated_at: new Date().toISOString(),
-              tier: tier || plan
+              tier: quote.plan
             })
           ]
         );
@@ -87,102 +127,8 @@ class PaymentService {
           stk_push_response: transactionId
         };
 
-      } else if (payment_mode === 'card' || payment_mode === 'stripe') {
-        if (!metadata.card_details) {
-          throw new ValidationError('Card details are required for card/stripe payment');
-        }
-
-        // Process card payment synchronously
-        transactionId = await CardService.processPayment(
-          metadata.card_details,
-          finalAmount,
-          finalCurrency,
-          `Payment_${paymentId}`,
-          `Subscription for ${tier || plan}`
-        );
-
-        status = 'success'; // Card payments are immediate
-
-        const result = await DatabaseHelper.executeQuery(
-          `INSERT INTO payments (
-            id, user_id, farm_id, plan, amount, currency, payment_mode, phone_number,
-            transaction_id, checkout_request_id, merchant_request_id, status, metadata, created_at, updated_at, is_deleted, is_active
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 1)
-          RETURNING *`,
-          [
-            paymentId,
-            userId,
-            farmId,
-            plan,
-            finalAmount,
-            finalCurrency,
-            payment_mode,
-            phone_number || null,
-            transactionId,
-            transactionId,
-            null,
-            status,
-            JSON.stringify({
-              ...metadata,
-              initiated_at: new Date().toISOString(),
-              tier: tier || plan
-            })
-          ]
-        );
-
-        // Upgrade user immediately for successful card payments
-        if (status === 'success') {
-          await this.upgradeUserTier(userId, plan, metadata);
-        }
-
-        return {
-          ...result.rows[0],
-          message: 'Payment successful',
-          stk_push_response: transactionId
-        };
-
-      } else {
-        // Other payment modes (simulated for now)
-        transactionId = `SIM_${uuidv4()}`;
-        status = 'success';
-
-        const result = await DatabaseHelper.executeQuery(
-          `INSERT INTO payments (
-            id, user_id, farm_id, plan, amount, currency, payment_mode, phone_number,
-            transaction_id, checkout_request_id, merchant_request_id, status, metadata, created_at, updated_at, is_deleted, is_active
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 1)
-          RETURNING *`,
-          [
-            paymentId,
-            userId,
-            farmId,
-            plan,
-            finalAmount,
-            finalCurrency,
-            payment_mode,
-            phone_number || null,
-            transactionId,
-            transactionId,
-            null,
-            status,
-            JSON.stringify({
-              ...metadata,
-              initiated_at: new Date().toISOString(),
-              tier: tier || plan
-            })
-          ]
-        );
-
-        if (status === 'success') {
-          await this.upgradeUserTier(userId, plan, metadata);
-        }
-
-        return {
-          ...result.rows[0],
-          message: 'Payment successful',
-          stk_push_response: transactionId
-        };
       }
+
     } catch (error) {
       logger.error(`Error creating payment: ${error.message}`);
       throw error;
@@ -360,7 +306,11 @@ static async handleMpesaCallback(callbackData) {
       await SubscriptionService.activatePaidSubscription(
         paymentRecord.user_id,
         paymentRecord.plan,
-        { startDate: new Date(), expiryDate: null }
+        {
+          startDate: new Date(),
+          expiryDate: null,
+          durationMonths: Number(paymentRecord.metadata?.duration_months) || undefined,
+        }
         // No client passed — gets its own fresh connection
       );
       logger.info(`Subscription activated for user ${paymentRecord.user_id}, payment ${paymentRecord.id}`);
@@ -568,14 +518,17 @@ static async getPaymentById(paymentId, userId) {
     }
   }
 
-  static async updatePaymentStatus(paymentId, status, userId, metadata = {}) {
+  static async updatePaymentStatus(paymentId, status, userId) {
+    if (status !== 'cancelled') {
+      throw new ValidationError('Payment status can only be changed to cancelled by the account owner');
+    }
     try {
       const result = await DatabaseHelper.executeQuery(
-        `UPDATE payments 
-         SET status = $1, metadata = metadata || $2::jsonb, updated_at = CURRENT_TIMESTAMP 
-         WHERE id = $3 AND user_id = $4 AND is_deleted = 0 
+        `UPDATE payments
+         SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND user_id = $2 AND status = 'pending' AND is_deleted = 0
          RETURNING *`,
-        [status, JSON.stringify(metadata), paymentId, userId]
+        [paymentId, userId]
       );
 
       if (result.rows.length === 0) {

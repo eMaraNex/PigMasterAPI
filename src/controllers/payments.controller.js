@@ -4,6 +4,15 @@ import { SuccessResponse } from '../middleware/responses.js';
 import logger from '../middleware/logger.js';
 
 class PaymentsController {
+  static async getPaymentQuote(req, res, next) {
+    try {
+      const quote = await PaymentService.quotePayment(req.query.plan, req.query.period || 'monthly');
+      return SuccessResponse(res, 200, 'Payment quote', quote);
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async createPayment(req, res, next) {
     try {
       const paymentData = req.body;

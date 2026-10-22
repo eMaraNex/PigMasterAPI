@@ -36,6 +36,14 @@ class RowsService {
     }
 
     try {
+      const farmResult = await DatabaseHelper.executeQuery(
+        "SELECT id FROM farms WHERE id = $1 AND created_by = $2 AND is_deleted = 0",
+        [farm_id, userId]
+      );
+      if (farmResult.rows.length === 0) {
+        throw new ValidationError("Farm not found");
+      }
+
       // Check if row exists
       const existingRow = await DatabaseHelper.executeQuery(
         "SELECT id FROM rows WHERE name = $1 AND farm_id = $2 AND is_deleted = 0",

@@ -1,8 +1,15 @@
 import { jest } from '@jest/globals';
+import { generateKeyPairSync } from 'node:crypto';
+import jwt from 'jsonwebtoken';
 
 const executeQueryMock = jest.fn();
 const executeTransactionMock = jest.fn();
 const getConnectionMock = jest.fn();
+const firebaseCertificateRequestMock = jest.fn();
+
+jest.unstable_mockModule('axios', () => ({
+  default: { get: firebaseCertificateRequestMock },
+}));
 
 jest.unstable_mockModule('../src/config/database.js', () => ({
   DatabaseHelper: {
@@ -48,10 +55,26 @@ jest.unstable_mockModule('../src/services/email.services.js', () => ({
 
 const { default: PaymentService } = await import('../src/services/payment.service.js');
 const { default: AuthService } = await import('../src/services/auth.services.js');
+const { default: FarmsService } = await import('../src/services/farms.services.js');
+const { default: RowsService } = await import('../src/services/rows.services.js');
 
 describe('subscription and payment flow', () => {
+  const { publicKey, privateKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+  });
+  const publicCertificate = publicKey.export({
+    format: 'pem',
+    type: 'spki',
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
+    process.env.FIREBASE_PROJECT_ID = 'pigmaster-test';
+    process.env.JWT_SECRET = 'test-jwt-secret-with-enough-entropy';
+    firebaseCertificateRequestMock.mockResolvedValue({
+      data: { 'test-kid': publicCertificate },
+      headers: { 'cache-control': 'max-age=60' },
+    });
     initializeDatabaseMock.mockResolvedValue(true);
     executeQueryMock.mockImplementation((query) => {
       if (query.includes('INSERT INTO roles')) {
@@ -65,6 +88,17 @@ describe('subscription and payment flow', () => {
       }
       if (query.includes('SELECT id FROM users WHERE email')) {
         return { rows: [] };
+      }
+      if (query.includes('SELECT * FROM users WHERE email = $1')) {
+        return { rows: [{
+          id: 'user-1',
+          email: 'verified@example.com',
+          name: 'Verified User',
+          role_id: 1,
+          farm_id: null,
+          email_verified: true,
+          permissions: [],
+        }] };
       }
       if (query.includes('INSERT INTO users')) {
         return { rows: [{ id: 'user-1', email: 'new@example.com', name: 'New User', role_id: 1, farm_id: null, email_verified: false, is_active: 1, is_deleted: 0, created_at: new Date() }] };
@@ -111,6 +145,73 @@ describe('subscription and payment flow', () => {
       farm_id: null,
       privacy_policy_accepted: false,
     })).rejects.toThrow('privacy policy consent');
+  });
+
+  test('SSO rejects caller-supplied identity without a Firebase ID token', async () => {
+    await expect(AuthService.ssoAuth({
+      email: 'victim@example.com',
+      name: 'Victim',
+      provider: 'google',
+    })).rejects.toThrow('Firebase ID token is required');
+    expect(executeQueryMock).not.toHaveBeenCalled();
+  });
+
+  test('SSO verifies Firebase token claims before resolving an account', async () => {
+    const idToken = jwt.sign({
+      sub: 'firebase-user-1',
+      email: 'verified@example.com',
+      email_verified: true,
+      name: 'Verified User',
+      aud: 'pigmaster-test',
+      iss: 'https://securetoken.google.com/pigmaster-test',
+    }, privateKey, {
+      algorithm: 'RS256',
+      keyid: 'test-kid',
+      expiresIn: '5m',
+    });
+
+    const result = await AuthService.ssoAuth({ idToken });
+    expect(result.user.email).toBe('verified@example.com');
+    expect(firebaseCertificateRequestMock).toHaveBeenCalledTimes(1);
+    expect(executeQueryMock).toHaveBeenCalledWith(
+      expect.stringContaining('SELECT * FROM users WHERE email = $1'),
+      ['verified@example.com']
+    );
+  });
+
+  test('farm listing is scoped to the authenticated owner', async () => {
+    await FarmsService.getAllFarms('owner-1');
+    expect(executeQueryMock).toHaveBeenCalledWith(
+      expect.stringContaining('created_by = $1'),
+      ['owner-1']
+    );
+  });
+
+  test('row creation rejects a farm not owned by the authenticated user', async () => {
+    await expect(RowsService.createRow({
+      farm_id: 'other-farm',
+      name: 'Row 1',
+      capacity: 1,
+      levels: ['A'],
+    }, 'user-1')).rejects.toThrow('Farm not found');
+    expect(executeQueryMock).toHaveBeenCalledWith(
+      expect.stringContaining('created_by = $2'),
+      ['other-farm', 'user-1']
+    );
+    expect(executeQueryMock).not.toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO rows'),
+      expect.anything()
+    );
+  });
+
+  test('unimplemented payment methods cannot create a successful payment', async () => {
+    await expect(PaymentService.createPayment({
+      plan: 'standard',
+      amount: 1,
+      currency: 'USD',
+      payment_mode: 'paypal',
+    }, 'user-1')).rejects.toThrow('not currently supported');
+    expect(executeQueryMock).not.toHaveBeenCalled();
   });
 
   test('duplicate callbacks are ignored and do not double activate the subscription', async () => {

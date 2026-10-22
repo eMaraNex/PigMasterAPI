@@ -40,6 +40,10 @@ export const loginSchema = Joi.object({
     })
 }).strict();
 
+export const ssoSchema = Joi.object({
+    idToken: Joi.string().min(1).max(8192).required()
+}).strict();
+
 export const forgotPasswordSchema = Joi.object({
     email: Joi.string().email().required().messages({
         'string.email': 'Email must be a valid email address',

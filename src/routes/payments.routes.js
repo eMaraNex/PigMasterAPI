@@ -11,6 +11,7 @@ const router = express.Router();
 router.post('/mpesa/callback', PaymentsController.mpesaCallback);
 
 // Protected routes
+router.get('/quote', authMiddleware, PaymentsController.getPaymentQuote);
 router.post('/', authMiddleware, validateRequest(paymentSchema), PaymentsController.createPayment);
 router.get('/', authMiddleware, PaymentsController.getPayments);
 router.get('/:paymentId', authMiddleware, PaymentsController.getPaymentById);

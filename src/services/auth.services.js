@@ -6,6 +6,60 @@ import EmailService from './email.services.js';
 import logger from '../middleware/logger.js';
 import { ValidationError, NotFoundError, UnauthorizedError } from '../middleware/errors.js';
 import SubscriptionService from './subscription.service.js';
+import axios from 'axios';
+
+let firebaseSigningCertificates;
+let firebaseCertificatesExpireAt = 0;
+
+const verifyFirebaseIdToken = async (idToken) => {
+    const projectId = process.env.FIREBASE_PROJECT_ID;
+    if (!projectId) {
+        throw new ValidationError('Google sign-in is not configured');
+    }
+
+    const getSigningKey = async (header, callback) => {
+        try {
+            if (!header.kid) {
+                throw new Error('Firebase ID token has no signing key id');
+            }
+            if (!firebaseSigningCertificates || Date.now() >= firebaseCertificatesExpireAt) {
+                const response = await axios.get(
+                    'https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com',
+                    { timeout: 5000 }
+                );
+                firebaseSigningCertificates = response.data;
+                const maxAge = Number(response.headers['cache-control']?.match(/max-age=(\d+)/)?.[1] ?? 3600);
+                firebaseCertificatesExpireAt = Date.now() + maxAge * 1000;
+            }
+            const certificate = firebaseSigningCertificates[header.kid];
+            if (!certificate) {
+                throw new Error('Firebase signing certificate not found');
+            }
+            callback(null, certificate);
+        } catch (error) {
+            callback(error);
+        }
+    };
+
+    return new Promise((resolve, reject) => {
+        jwt.verify(
+            idToken,
+            getSigningKey,
+            {
+                algorithms: ['RS256'],
+                audience: projectId,
+                issuer: `https://securetoken.google.com/${projectId}`,
+            },
+            (error, claims) => {
+                if (error) return reject(new UnauthorizedError('Invalid identity provider token'));
+                if (!claims?.sub || !claims.email || claims.email_verified !== true) {
+                    return reject(new UnauthorizedError('Verified email is required for Google sign-in'));
+                }
+                resolve(claims);
+            }
+        );
+    });
+};
 
 class AuthService {
     static async register({
@@ -544,12 +598,15 @@ class AuthService {
         }
     }
 
-    static async ssoAuth({ email, name, image_url, provider }) {
+    static async ssoAuth({ idToken }) {
         try {
-            // Input validation
-            if (!email || !name) {
-                throw new ValidationError('Email, name are required');
+            if (!idToken || typeof idToken !== 'string') {
+                throw new ValidationError('Firebase ID token is required');
             }
+            const claims = await verifyFirebaseIdToken(idToken);
+            const email = claims.email.toLowerCase();
+            const name = claims.name || email.split('@')[0];
+            const image_url = claims.picture || null;
 
             // Check if user exists
             const userResult = await DatabaseHelper.executeQuery(
@@ -596,7 +653,7 @@ class AuthService {
                         email_verified, is_active, is_deleted, preferences, created_at, provider, password_hash
                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP, $12, $13)
                     RETURNING id, email, name, role_id, farm_id, email_verified, is_active, is_deleted, created_at, avatar_url`,
-                    [ userId, email, name, null, image_url || null, finalRoleId, null, true, 1, 0, JSON.stringify({}), provider || 'sso', null ]
+                    [ userId, email, name, null, image_url, finalRoleId, null, true, 1, 0, JSON.stringify({}), 'google', null ]
                 );
 
                 user = insertResult.rows[0];

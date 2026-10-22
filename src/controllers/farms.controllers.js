@@ -29,7 +29,7 @@ class FarmsController {
 
     static async getAllFarms(req, res, next) {
         try {
-            const farms = await FarmsService.getAllFarms();
+            const farms = await FarmsService.getAllFarms(req.user.id);
             return SuccessResponse(res, 200, 'Farms retrieved successfully', farms);
         } catch (error) {
             logger.error(`Get all farms error: ${error.message}`);

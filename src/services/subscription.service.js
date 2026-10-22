@@ -196,11 +196,12 @@ class SubscriptionService {
       const existingExpiry = existing?.expiry_date ? new Date(existing.expiry_date) : null;
 
       let startDate = options.startDate ? new Date(options.startDate) : now;
-      let expiryDate = options.expiryDate ? new Date(options.expiryDate) : new Date(startDate.getTime() + Math.max(1, Number(plan.duration_months || 1)) * MONTH_IN_MS);
+      const durationMonths = Math.max(1, Number(options.durationMonths ?? plan.duration_months) || 1);
+      let expiryDate = options.expiryDate ? new Date(options.expiryDate) : new Date(startDate.getTime() + durationMonths * MONTH_IN_MS);
 
       if (existing && existing.expiry_date && existingExpiry && existingExpiry.getTime() > now.getTime()) {
         startDate = existingExpiry;
-        expiryDate = new Date(existingExpiry.getTime() + Math.max(1, Number(plan.duration_months || 1)) * MONTH_IN_MS);
+        expiryDate = new Date(existingExpiry.getTime() + durationMonths * MONTH_IN_MS);
       }
 
       const roleResult = client

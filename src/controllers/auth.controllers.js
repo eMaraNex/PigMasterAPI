@@ -7,6 +7,16 @@ import fs from 'fs';
 import path from 'path';
 
 class AuthController {
+    static setSessionCookie(res, token) {
+        res.cookie('pig_farm_token', token, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'strict',
+            path: '/',
+            maxAge: 7 * 24 * 60 * 60 * 1000,
+        });
+    }
+
     static async register(req, res, next) {
         try {
             const user = await AuthService.register(req.body);
@@ -32,7 +42,12 @@ class AuthController {
                 requires_email_verification: !result.user.email_verified
             };
 
-            return SuccessResponse(res, 200, message, responseData);
+            AuthController.setSessionCookie(res, result.token);
+            const safeResponse = {
+                user: responseData.user,
+                requires_email_verification: responseData.requires_email_verification,
+            };
+            return SuccessResponse(res, 200, message, safeResponse);
         } catch (error) {
             logger.error(`Login error: ${error.message}`);
             next(error);
@@ -147,8 +162,20 @@ class AuthController {
 
     static async logout(req, res, next) {
         try {
-            const token = req.headers.authorization?.split(' ')[1];
+            const headerToken = req.headers.authorization?.startsWith('Bearer ')
+                ? req.headers.authorization.slice(7)
+                : null;
+            const token = headerToken && !['null', 'undefined', ''].includes(headerToken)
+                ? headerToken
+                : decodeURIComponent(req.headers.cookie?.split(';').map((part) => part.trim())
+                    .find((part) => part.startsWith('pig_farm_token='))?.slice('pig_farm_token='.length) || '');
             const result = await AuthService.logout(token);
+            res.clearCookie('pig_farm_token', {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                sameSite: 'strict',
+                path: '/',
+            });
             return SuccessResponse(res, 200, 'Logged out successfully', result);
         } catch (error) {
             logger.error(`Logout error: ${error.message}`);
@@ -158,17 +185,32 @@ class AuthController {
 
     static async ssoAuth(req, res, next) {
         try {
-            const { email, name, image_url, provider } = req.body;
-            const result = await AuthService.ssoAuth({ email, name, image_url, provider });
+            const { idToken } = req.validatedBody;
+            const result = await AuthService.ssoAuth({ idToken });
+            AuthController.setSessionCookie(res, result.token);
 
             const message = result.user.farm_id 
             ? 'SSO authentication successful' 
             : 'SSO authentication successful. Please create or join a farm to continue.';
 
-            return SuccessResponse(res, 200, message, result);
+            const safeResponse = { user: result.user };
+            return SuccessResponse(res, 200, message, safeResponse);
         } catch (error) {
             logger.error(`SSO auth error: ${error.message}`);
             next(error);
+        }
+    }
+
+    static async me(req, res, next) {
+            try {
+                const { id, email, name, role_id, farm_id, role_name, permissions,
+                    subscription_start, subscription_end } = req.user;
+                return SuccessResponse(res, 200, 'Session restored', {
+                    id, email, name, role_id, farm_id, role_name, permissions,
+                    subscription_start, subscription_end,
+                });
+            } catch (error) {
+                next(error);
         }
     }
 }

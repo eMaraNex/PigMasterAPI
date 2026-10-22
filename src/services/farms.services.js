@@ -76,6 +76,7 @@ class FarmsService {
 
   static async getFarmById(farmId, userId) {
     try {
+      // Keep creator-only access until the owner approves a farm-sharing membership model.
       const result = await DatabaseHelper.executeQuery(
         "SELECT * FROM farms WHERE id = $1 AND created_by = $2 AND is_deleted = 0",
         [farmId, userId]
@@ -93,7 +94,8 @@ class FarmsService {
   static async getAllFarms(userId) {
     try {
       const result = await DatabaseHelper.executeQuery(
-        "SELECT * FROM farms WHERE is_deleted = 0 ORDER BY created_at DESC"
+        "SELECT * FROM farms WHERE created_by = $1 AND is_deleted = 0 ORDER BY created_at DESC",
+        [userId]
       );
       return result.rows;
     } catch (error) {

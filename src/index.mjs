@@ -88,6 +88,7 @@ const corsOrigins = process.env.CORS_ORIGIN
   : [
     "https://pigmaster.emaranex.com",
     "http://localhost:3000",
+    "http://localhost:3001",
     "https://pigmaster.vercel.app",
   ];
 

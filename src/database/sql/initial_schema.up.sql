@@ -1,5 +1,11 @@
 -- ============================================================
--- EXTENSIONS
+-- PigMaster initial schema (single baseline migration)
+--
+-- Multi-tenant rules enforced by the database:
+--   * Every farm-owned record carries farm_id.
+--   * References between farm-owned records are composite (farm_id, key) foreign
+--     keys, so a record can never point at a pig, pen or row of another farm.
+--   * Pig tags (pig_id) are unique per farm, not globally.
 -- ============================================================
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
@@ -24,7 +30,8 @@ VALUES
   ('standard',   'Standard tier - Enhanced features',     '["analytics", "exports", "multi_user"]'::JSONB,                        1, 0),
   ('advanced',   'Advanced tier - Full access',           '["unlimited_pigs", "sms_alerts", "integrations", "automation"]'::JSONB, 1, 0),
   ('admin',      'Admin role - Full farm management',     '["all"]'::JSONB,                                                        1, 0),
-  ('superadmin', 'SuperAdmin role - System-wide control', '["all", "manage_roles"]'::JSONB,                                        1, 0)
+  ('superadmin', 'SuperAdmin role - System-wide control', '["all", "manage_roles"]'::JSONB,                                        1, 0),
+  ('partner',    'Read-only platform analytics partner',  '["platform_analytics"]'::JSONB,                                         1, 0)
 ON CONFLICT (name) DO NOTHING;
 
 
@@ -48,6 +55,8 @@ CREATE TABLE IF NOT EXISTS users (
   preferences         JSONB        DEFAULT '{}'::JSONB,
   subscription_start  TIMESTAMP WITH TIME ZONE,
   subscription_end    TIMESTAMP WITH TIME ZONE,
+  admin_mfa_secret    TEXT,
+  admin_mfa_enabled   BOOLEAN      NOT NULL DEFAULT false,
   is_active           INTEGER      DEFAULT 1 CHECK (is_active IN (0, 1)),
   is_deleted          INTEGER      DEFAULT 0 CHECK (is_deleted IN (0, 1)),
   created_at          TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -60,10 +69,10 @@ CREATE TABLE IF NOT EXISTS users (
 -- ============================================================
 CREATE TABLE IF NOT EXISTS farms (
   id          UUID           PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name        VARCHAR(255)   NOT NULL UNIQUE,
+  name        VARCHAR(255)   NOT NULL,
   location    VARCHAR(255),
-  latitude    DECIMAL(9, 2),
-  longitude   DECIMAL(9, 2),
+  latitude    DECIMAL(9, 6),
+  longitude   DECIMAL(9, 6),
   size        DECIMAL(10, 2),
   description TEXT,
   timezone    VARCHAR(255)   DEFAULT 'UTC',
@@ -77,6 +86,10 @@ CREATE TABLE IF NOT EXISTS farms (
   created_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
   updated_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Farm names only need to be unique per owner.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_farms_owner_name
+  ON farms (created_by, lower(name)) WHERE is_deleted = 0;
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS farm_id UUID REFERENCES farms(id) ON DELETE SET NULL;
 
@@ -124,6 +137,56 @@ CREATE TABLE IF NOT EXISTS subscription_plans (
   updated_at       TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+INSERT INTO subscription_plans (name, duration_months, price, currency, description, is_active)
+VALUES
+  ('free',     0, 0, 'USD', 'Free plan with basic access', 1),
+  ('standard', 1, 1, 'USD', 'Standard monthly plan',       1),
+  ('advanced', 1, 2, 'USD', 'Advanced monthly plan',       1)
+ON CONFLICT (name) DO NOTHING;
+
+
+-- ============================================================
+-- PAYMENTS
+-- ============================================================
+CREATE TABLE IF NOT EXISTS payments (
+  id                   UUID           PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id              UUID           NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  farm_id              UUID           REFERENCES farms(id) ON DELETE SET NULL,
+  plan                 VARCHAR(50)    NOT NULL,
+  amount               NUMERIC(10, 2) NOT NULL CHECK (amount >= 0),
+  currency             VARCHAR(3)     NOT NULL DEFAULT 'USD',
+  payment_mode         VARCHAR(50)    NOT NULL DEFAULT 'mpesa',
+  phone_number         VARCHAR(20),
+  -- Client-supplied key so a retried "Pay" request never triggers a second STK push.
+  idempotency_key      VARCHAR(100),
+  -- Secret embedded in the per-payment callback URL; the callback is rejected without it.
+  callback_token       VARCHAR(64),
+  transaction_id       VARCHAR(255),
+  merchant_request_id  VARCHAR(255),
+  checkout_request_id  VARCHAR(255),
+  mpesa_receipt_number VARCHAR(100),
+  callback_payload     JSONB          DEFAULT '{}'::JSONB,
+  status               VARCHAR(20)    NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'success', 'failed', 'cancelled')),
+  failure_reason       TEXT,
+  status_checks        INTEGER        NOT NULL DEFAULT 0,
+  last_checked_at      TIMESTAMP WITH TIME ZONE,
+  completed_at         TIMESTAMP WITH TIME ZONE,
+  metadata             JSONB          DEFAULT '{}'::JSONB,
+  is_active            INTEGER        DEFAULT 1 CHECK (is_active IN (0, 1)),
+  is_deleted           INTEGER        DEFAULT 0 CHECK (is_deleted IN (0, 1)),
+  created_at           TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at           TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_user_idempotency
+  ON payments (user_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_checkout_request
+  ON payments (checkout_request_id) WHERE checkout_request_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_callback_token
+  ON payments (callback_token) WHERE callback_token IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_mpesa_receipt
+  ON payments (mpesa_receipt_number) WHERE mpesa_receipt_number IS NOT NULL;
+
 
 -- ============================================================
 -- SUBSCRIPTIONS
@@ -132,6 +195,8 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   id               UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id          UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   plan_id          UUID        REFERENCES subscription_plans(id) ON DELETE SET NULL,
+  -- One subscription per successful payment: makes activation idempotent.
+  payment_id       UUID        UNIQUE REFERENCES payments(id) ON DELETE SET NULL,
   current_plan     VARCHAR(50) NOT NULL DEFAULT 'trial',
   status           VARCHAR(20) NOT NULL DEFAULT 'trial' CHECK (status IN ('trial','active','expired','cancelled','pending_payment')),
   trial_start_date TIMESTAMP WITH TIME ZONE,
@@ -159,8 +224,10 @@ CREATE TABLE IF NOT EXISTS rows (
   is_deleted  INTEGER      DEFAULT 0 CHECK (is_deleted IN (0, 1)),
   created_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
   updated_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE (farm_id, name)
+  UNIQUE (farm_id, id)
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rows_farm_name ON rows (farm_id, name) WHERE is_deleted = 0;
 
 
 -- ============================================================
@@ -169,10 +236,10 @@ CREATE TABLE IF NOT EXISTS rows (
 CREATE TABLE IF NOT EXISTS pens (
   id           UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
   name         VARCHAR(50) NOT NULL,
-  row_id       UUID        REFERENCES rows(id) ON DELETE CASCADE,
+  row_id       UUID,
   farm_id      UUID        NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
   level        VARCHAR(1)  NOT NULL CHECK (level ~ '^[A-Z]$'),
-  position     INTEGER     NOT NULL CHECK (position BETWEEN 1 AND 50),
+  position     INTEGER     NOT NULL CHECK (position BETWEEN 1 AND 200),
   size         VARCHAR(20) NOT NULL DEFAULT 'medium',
   material     VARCHAR(20) NOT NULL DEFAULT 'wire',
   features     JSONB       DEFAULT '["water bottle", "feeder"]',
@@ -181,9 +248,12 @@ CREATE TABLE IF NOT EXISTS pens (
   is_deleted   INTEGER     DEFAULT 0 CHECK (is_deleted IN (0, 1)),
   created_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
   updated_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE (farm_id, name),
-  UNIQUE (row_id, level, position)
+  UNIQUE (farm_id, id),
+  FOREIGN KEY (farm_id, row_id) REFERENCES rows (farm_id, id) ON DELETE CASCADE
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_pens_farm_name ON pens (farm_id, name) WHERE is_deleted = 0;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_pens_row_slot ON pens (row_id, level, position) WHERE is_deleted = 0;
 
 
 -- ============================================================
@@ -192,16 +262,16 @@ CREATE TABLE IF NOT EXISTS pens (
 CREATE TABLE IF NOT EXISTS pigs (
   id                  UUID           PRIMARY KEY DEFAULT uuid_generate_v4(),
   farm_id             UUID           NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
-  pig_id              VARCHAR(200)   NOT NULL UNIQUE,
+  pig_id              VARCHAR(200)   NOT NULL,
   name                VARCHAR(50),
   gender              VARCHAR(6)     NOT NULL CHECK (gender IN ('male', 'female')),
   breed               VARCHAR(50)    NOT NULL,
   color               VARCHAR(50)    NOT NULL,
   birth_date          DATE           NOT NULL,
-  weight              DECIMAL(5, 2)  NOT NULL CHECK (weight > 0),
-  pen_id              UUID           REFERENCES pens(id),
-  parent_male_id      VARCHAR(200)   REFERENCES pigs(pig_id),
-  parent_female_id    VARCHAR(200)   REFERENCES pigs(pig_id),
+  weight              DECIMAL(6, 2)  NOT NULL CHECK (weight > 0),
+  pen_id              UUID,
+  parent_male_id      VARCHAR(200),
+  parent_female_id    VARCHAR(200),
   acquisition_type    VARCHAR(20)    DEFAULT 'birth',
   acquisition_date    DATE,
   acquisition_cost    DECIMAL(10, 2) CHECK (acquisition_cost >= 0),
@@ -215,7 +285,11 @@ CREATE TABLE IF NOT EXISTS pigs (
   notes               TEXT,
   is_deleted          INTEGER        DEFAULT 0 CHECK (is_deleted IN (0, 1)),
   created_at          TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  updated_at          TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  updated_at          TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (farm_id, pig_id),
+  FOREIGN KEY (farm_id, pen_id)           REFERENCES pens (farm_id, id),
+  FOREIGN KEY (farm_id, parent_male_id)   REFERENCES pigs (farm_id, pig_id),
+  FOREIGN KEY (farm_id, parent_female_id) REFERENCES pigs (farm_id, pig_id)
 );
 
 
@@ -224,8 +298,8 @@ CREATE TABLE IF NOT EXISTS pigs (
 -- ============================================================
 CREATE TABLE IF NOT EXISTS pen_pig_history (
   id              UUID           PRIMARY KEY DEFAULT uuid_generate_v4(),
-  pen_id          UUID           REFERENCES pens(id) ON DELETE CASCADE,
-  pig_id          VARCHAR(200)   REFERENCES pigs(pig_id) ON DELETE CASCADE,
+  pen_id          UUID,
+  pig_id          VARCHAR(200),
   farm_id         UUID           NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
   assigned_at     TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
   removed_at      TIMESTAMP WITH TIME ZONE,
@@ -233,11 +307,13 @@ CREATE TABLE IF NOT EXISTS pen_pig_history (
   removal_notes   TEXT,
   sale_amount     DECIMAL(10, 2) CHECK (sale_amount >= 0),
   sale_date       DATE,
-  sale_weight     DECIMAL(5, 2)  CHECK (sale_weight > 0),
+  sale_weight     DECIMAL(6, 2)  CHECK (sale_weight > 0),
   sold_to         VARCHAR(100),
   is_deleted      INTEGER        DEFAULT 0 CHECK (is_deleted IN (0, 1)),
   created_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  updated_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  updated_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (farm_id, pen_id) REFERENCES pens (farm_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (farm_id, pig_id) REFERENCES pigs (farm_id, pig_id) ON DELETE CASCADE
 );
 
 
@@ -247,8 +323,8 @@ CREATE TABLE IF NOT EXISTS pen_pig_history (
 CREATE TABLE IF NOT EXISTS breeding_records (
   id                  UUID    PRIMARY KEY DEFAULT uuid_generate_v4(),
   farm_id             UUID    NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
-  sow_id              VARCHAR(200) NOT NULL REFERENCES pigs(pig_id) ON DELETE CASCADE,
-  boar_id             VARCHAR(200) NOT NULL REFERENCES pigs(pig_id) ON DELETE CASCADE,
+  sow_id              VARCHAR(200) NOT NULL,
+  boar_id             VARCHAR(200) NOT NULL,
   mating_date         DATE    NOT NULL,
   expected_birth_date DATE,
   actual_birth_date   DATE,
@@ -257,7 +333,10 @@ CREATE TABLE IF NOT EXISTS breeding_records (
   alert_date          DATE,
   is_deleted          INTEGER DEFAULT 0 CHECK (is_deleted IN (0, 1)),
   created_at          TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  updated_at          TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  updated_at          TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (farm_id, id),
+  FOREIGN KEY (farm_id, sow_id)  REFERENCES pigs (farm_id, pig_id) ON DELETE CASCADE,
+  FOREIGN KEY (farm_id, boar_id) REFERENCES pigs (farm_id, pig_id) ON DELETE CASCADE
 );
 
 
@@ -266,7 +345,7 @@ CREATE TABLE IF NOT EXISTS breeding_records (
 -- ============================================================
 CREATE TABLE IF NOT EXISTS piglet_records (
   id                  UUID          PRIMARY KEY DEFAULT uuid_generate_v4(),
-  breeding_record_id  UUID          NOT NULL REFERENCES breeding_records(id) ON DELETE CASCADE,
+  breeding_record_id  UUID          NOT NULL,
   farm_id             UUID          NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
   piglet_number       VARCHAR(50)   NOT NULL,
   birth_weight        DECIMAL(5, 2) CHECK (birth_weight > 0),
@@ -275,13 +354,19 @@ CREATE TABLE IF NOT EXISTS piglet_records (
   status              VARCHAR(20)   DEFAULT 'alive',
   weaning_date        DATE,
   weaning_weight      DECIMAL(5, 2) CHECK (weaning_weight > 0),
-  parent_male_id      VARCHAR(200)  REFERENCES pigs(pig_id) ON DELETE CASCADE,
-  parent_female_id    VARCHAR(200)  REFERENCES pigs(pig_id) ON DELETE CASCADE,
+  parent_male_id      VARCHAR(200),
+  parent_female_id    VARCHAR(200),
   notes               TEXT,
   is_deleted          INTEGER       DEFAULT 0 CHECK (is_deleted IN (0, 1)),
   created_at          TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  updated_at          TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  updated_at          TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (farm_id, breeding_record_id) REFERENCES breeding_records (farm_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (farm_id, parent_male_id)     REFERENCES pigs (farm_id, pig_id) ON DELETE CASCADE,
+  FOREIGN KEY (farm_id, parent_female_id)   REFERENCES pigs (farm_id, pig_id) ON DELETE CASCADE
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_piglets_farm_number
+  ON piglet_records (farm_id, piglet_number) WHERE is_deleted = 0;
 
 
 -- ============================================================
@@ -290,14 +375,16 @@ CREATE TABLE IF NOT EXISTS piglet_records (
 CREATE TABLE IF NOT EXISTS breeding_calendar (
   id           UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
   farm_id      UUID         NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
-  sow_id       VARCHAR(200) NOT NULL REFERENCES pigs(pig_id) ON DELETE CASCADE,
-  boar_id      VARCHAR(200) NOT NULL REFERENCES pigs(pig_id) ON DELETE CASCADE,
+  sow_id       VARCHAR(200) NOT NULL,
+  boar_id      VARCHAR(200) NOT NULL,
   planned_date DATE         NOT NULL,
   status       VARCHAR(20)  DEFAULT 'planned',
   notes        TEXT,
   is_deleted   INTEGER      DEFAULT 0 CHECK (is_deleted IN (0, 1)),
   created_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  updated_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  updated_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (farm_id, sow_id)  REFERENCES pigs (farm_id, pig_id) ON DELETE CASCADE,
+  FOREIGN KEY (farm_id, boar_id) REFERENCES pigs (farm_id, pig_id) ON DELETE CASCADE
 );
 
 
@@ -306,7 +393,8 @@ CREATE TABLE IF NOT EXISTS breeding_calendar (
 -- ============================================================
 CREATE TABLE IF NOT EXISTS health_records (
   id           UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
-  pig_id       VARCHAR(200) NOT NULL REFERENCES pigs(pig_id) ON DELETE CASCADE,
+  farm_id      UUID         NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
+  pig_id       VARCHAR(200) NOT NULL,
   type         VARCHAR(20)  NOT NULL CHECK (type IN ('vaccination', 'treatment', 'checkup', 'medication', 'surgery', 'other')),
   description  TEXT         NOT NULL,
   date         DATE         NOT NULL,
@@ -316,7 +404,8 @@ CREATE TABLE IF NOT EXISTS health_records (
   notes        TEXT,
   is_deleted   INTEGER      DEFAULT 0 CHECK (is_deleted IN (0, 1)),
   created_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  updated_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  updated_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (farm_id, pig_id) REFERENCES pigs (farm_id, pig_id) ON DELETE CASCADE
 );
 
 
@@ -326,7 +415,7 @@ CREATE TABLE IF NOT EXISTS health_records (
 CREATE TABLE IF NOT EXISTS health_alerts (
   id          UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
   farm_id     UUID        NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
-  pig_id      VARCHAR(200) REFERENCES pigs(pig_id) ON DELETE CASCADE,
+  pig_id      VARCHAR(200),
   alert_type  VARCHAR(50)  NOT NULL,
   severity    VARCHAR(20)  DEFAULT 'medium',
   message     TEXT         NOT NULL,
@@ -336,7 +425,8 @@ CREATE TABLE IF NOT EXISTS health_alerts (
   resolved_by UUID         REFERENCES users(id),
   is_deleted  INTEGER      DEFAULT 0 CHECK (is_deleted IN (0, 1)),
   created_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  updated_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  updated_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (farm_id, pig_id) REFERENCES pigs (farm_id, pig_id) ON DELETE CASCADE
 );
 
 
@@ -362,7 +452,8 @@ CREATE TABLE IF NOT EXISTS vaccination_schedules (
 -- ============================================================
 CREATE TABLE IF NOT EXISTS feeding_schedules (
   id           UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
-  pig_id       VARCHAR(200) NOT NULL REFERENCES pigs(pig_id) ON DELETE CASCADE,
+  farm_id      UUID         NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
+  pig_id       VARCHAR(200) NOT NULL,
   daily_amount VARCHAR(50)  NOT NULL,
   feed_type    VARCHAR(50)  NOT NULL,
   times        JSONB        NOT NULL,
@@ -371,7 +462,8 @@ CREATE TABLE IF NOT EXISTS feeding_schedules (
   is_active    INTEGER      DEFAULT 0 CHECK (is_active IN (0, 1)),
   is_deleted   INTEGER      DEFAULT 0 CHECK (is_deleted IN (0, 1)),
   created_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  updated_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  updated_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (farm_id, pig_id) REFERENCES pigs (farm_id, pig_id) ON DELETE CASCADE
 );
 
 
@@ -380,8 +472,8 @@ CREATE TABLE IF NOT EXISTS feeding_schedules (
 -- ============================================================
 CREATE TABLE IF NOT EXISTS feeding_records (
   id           UUID          PRIMARY KEY DEFAULT uuid_generate_v4(),
-  pig_id       VARCHAR(200)  REFERENCES pigs(pig_id) ON DELETE CASCADE,
-  pen_id       UUID          REFERENCES pens(id),
+  pig_id       VARCHAR(200),
+  pen_id       UUID,
   farm_id      UUID          NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
   feed_type    VARCHAR(50)   NOT NULL,
   amount       VARCHAR(50)   NOT NULL,
@@ -397,7 +489,9 @@ CREATE TABLE IF NOT EXISTS feeding_records (
   pigs_count   INTEGER       DEFAULT 0,
   is_deleted   INTEGER       DEFAULT 0 CHECK (is_deleted IN (0, 1)),
   created_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  updated_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  updated_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (farm_id, pig_id) REFERENCES pigs (farm_id, pig_id) ON DELETE CASCADE,
+  FOREIGN KEY (farm_id, pen_id) REFERENCES pens (farm_id, id)
 );
 
 
@@ -429,20 +523,22 @@ CREATE TABLE IF NOT EXISTS earnings_records (
   id              UUID           PRIMARY KEY DEFAULT uuid_generate_v4(),
   farm_id         UUID           NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
   type            VARCHAR(20)    NOT NULL,
-  pig_id          VARCHAR(200)   REFERENCES pigs(pig_id),
+  pig_id          VARCHAR(200),
   amount          DECIMAL(12, 2) NOT NULL CHECK (amount >= 0),
   currency        VARCHAR(3)     DEFAULT 'USD',
   date            DATE           NOT NULL,
   weight          DECIMAL(8, 2)  CHECK (weight > 0),
-  sale_type       VARCHAR(20)    NOT NULL,
+  sale_type       VARCHAR(20),
   includes_urine  BOOLEAN        DEFAULT false,
   includes_manure BOOLEAN        DEFAULT false,
   buyer_name      VARCHAR(100),
   notes           TEXT,
-  pen_id          UUID           REFERENCES pens(id),
+  pen_id          UUID,
   is_deleted      INTEGER        DEFAULT 0 CHECK (is_deleted IN (0, 1)),
   created_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  updated_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  updated_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (farm_id, pig_id) REFERENCES pigs (farm_id, pig_id),
+  FOREIGN KEY (farm_id, pen_id) REFERENCES pens (farm_id, id)
 );
 
 
@@ -469,8 +565,8 @@ CREATE TABLE IF NOT EXISTS production_records (
 -- ============================================================
 CREATE TABLE IF NOT EXISTS removal_records (
   id          UUID          PRIMARY KEY DEFAULT uuid_generate_v4(),
-  pig_id      VARCHAR(200)  NOT NULL REFERENCES pigs(pig_id) ON DELETE CASCADE,
-  pen_id      UUID          REFERENCES pens(id),
+  pig_id      VARCHAR(200)  NOT NULL,
+  pen_id      UUID,
   farm_id     UUID          NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
   reason      VARCHAR(100)  NOT NULL CHECK (reason IN (
     'sale',
@@ -489,10 +585,12 @@ CREATE TABLE IF NOT EXISTS removal_records (
   notes       TEXT,
   date        DATE          NOT NULL,
   sale_amount DECIMAL(10,2) CHECK (sale_amount >= 0),
-  sale_weight DECIMAL(5, 2) CHECK (sale_weight > 0),
+  sale_weight DECIMAL(6, 2) CHECK (sale_weight > 0),
   sold_to     VARCHAR(100),
   is_deleted  INTEGER       DEFAULT 0 CHECK (is_deleted IN (0, 1)),
-  created_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  created_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (farm_id, pig_id) REFERENCES pigs (farm_id, pig_id) ON DELETE CASCADE,
+  FOREIGN KEY (farm_id, pen_id) REFERENCES pens (farm_id, id)
 );
 
 
@@ -539,7 +637,7 @@ CREATE TABLE IF NOT EXISTS notifications (
 
 
 -- ============================================================
--- ACTIVITY LOGS
+-- ACTIVITY LOGS (farmer-side audit trail written by the CRUD engine)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS activity_logs (
   id          UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -547,13 +645,26 @@ CREATE TABLE IF NOT EXISTS activity_logs (
   farm_id     UUID        REFERENCES farms(id),
   action      VARCHAR(100) NOT NULL,
   entity_type VARCHAR(50),
-  entity_id   VARCHAR(50),
+  entity_id   VARCHAR(200),
   old_values  JSONB,
   new_values  JSONB,
   ip_address  INET,
   user_agent  TEXT,
   is_deleted  INTEGER     DEFAULT 0 CHECK (is_deleted IN (0, 1)),
   created_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+
+-- ============================================================
+-- ADMIN AUDIT LOGS
+-- ============================================================
+CREATE TABLE IF NOT EXISTS admin_audit_logs (
+  id            UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
+  actor_user_id UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  action        VARCHAR(120) NOT NULL,
+  ip_address    INET,
+  filters       JSONB        NOT NULL DEFAULT '{}'::JSONB,
+  created_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 
@@ -598,14 +709,15 @@ CREATE TABLE IF NOT EXISTS file_uploads (
 CREATE TABLE IF NOT EXISTS pig_birth_history (
   id                 UUID    PRIMARY KEY DEFAULT uuid_generate_v4(),
   farm_id            UUID    NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
-  sow_id             VARCHAR(200) NOT NULL REFERENCES pigs(pig_id) ON DELETE CASCADE,
+  sow_id             VARCHAR(200) NOT NULL,
   breeding_record_id UUID    REFERENCES breeding_records(id) ON DELETE SET NULL,
   birth_date         DATE    NOT NULL,
   number_of_piglets  INTEGER NOT NULL CHECK (number_of_piglets >= 0),
   notes              TEXT,
   is_deleted         INTEGER DEFAULT 0 CHECK (is_deleted IN (0, 1)),
   created_at         TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  updated_at         TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  updated_at         TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (farm_id, sow_id) REFERENCES pigs (farm_id, pig_id) ON DELETE CASCADE
 );
 
 
@@ -623,13 +735,15 @@ CREATE TABLE IF NOT EXISTS alerts (
   status           VARCHAR(20)  NOT NULL CHECK (status IN ('pending', 'sent', 'completed', 'rejected')),
   farm_id          UUID         NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
   user_id          UUID         REFERENCES users(id) ON DELETE SET NULL,
-  pig_id           VARCHAR(200) REFERENCES pigs(pig_id) ON DELETE SET NULL,
-  pen_id           UUID         REFERENCES pens(id) ON DELETE SET NULL,
+  pig_id           VARCHAR(200),
+  pen_id           UUID,
   notify_on        DATE[]       NOT NULL DEFAULT '{}',
   created_on       TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
   updated_on       TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
   is_active        BOOLEAN      DEFAULT true,
-  is_deleted       BOOLEAN      DEFAULT false
+  is_deleted       BOOLEAN      DEFAULT false,
+  FOREIGN KEY (farm_id, pig_id) REFERENCES pigs (farm_id, pig_id) ON DELETE SET NULL (pig_id),
+  FOREIGN KEY (farm_id, pen_id) REFERENCES pens (farm_id, id) ON DELETE SET NULL (pen_id)
 );
 
 
@@ -650,40 +764,14 @@ CREATE TABLE IF NOT EXISTS email_logs (
 
 
 -- ============================================================
--- PAYMENTS
--- ============================================================
-CREATE TABLE IF NOT EXISTS payments (
-  id                   UUID           PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id              UUID           NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  farm_id              UUID           REFERENCES farms(id) ON DELETE SET NULL,
-  plan                 VARCHAR(50)    NOT NULL,
-  amount               NUMERIC(10, 2) NOT NULL CHECK (amount >= 0),
-  currency             VARCHAR(3)     NOT NULL DEFAULT 'USD',
-  payment_mode         VARCHAR(50)    NOT NULL DEFAULT 'mpesa',
-  phone_number         VARCHAR(20),
-  transaction_id       VARCHAR(255),
-  merchant_request_id  VARCHAR(255),
-  checkout_request_id  VARCHAR(255),
-  mpesa_receipt_number VARCHAR(100),
-  callback_payload     JSONB          DEFAULT '{}'::JSONB,
-  status               VARCHAR(20)    NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'success', 'failed', 'cancelled')),
-  metadata             JSONB          DEFAULT '{}'::JSONB,
-  is_active            INTEGER        DEFAULT 1 CHECK (is_active IN (0, 1)),
-  is_deleted           INTEGER        DEFAULT 0 CHECK (is_deleted IN (0, 1)),
-  created_at           TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  updated_at           TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
-
--- ============================================================
 -- PIG TRANSFER HISTORY
 -- ============================================================
 CREATE TABLE IF NOT EXISTS pig_transfer_history (
   id              UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
   farm_id         UUID         NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
-  pig_id          VARCHAR(200) NOT NULL REFERENCES pigs(pig_id) ON DELETE CASCADE,
-  old_pen_id      UUID         REFERENCES pens(id) ON DELETE SET NULL,
-  new_pen_id      UUID         NOT NULL REFERENCES pens(id) ON DELETE RESTRICT,
+  pig_id          VARCHAR(200) NOT NULL,
+  old_pen_id      UUID,
+  new_pen_id      UUID         NOT NULL,
   transfer_reason VARCHAR(100) NOT NULL CHECK (transfer_reason IN (
     'quarantine',
     'cannibalism_prevention',
@@ -698,7 +786,10 @@ CREATE TABLE IF NOT EXISTS pig_transfer_history (
   transferred_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
   is_deleted      INTEGER      DEFAULT 0 CHECK (is_deleted IN (0, 1)),
   created_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  updated_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  updated_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (farm_id, pig_id)     REFERENCES pigs (farm_id, pig_id) ON DELETE CASCADE,
+  FOREIGN KEY (farm_id, old_pen_id) REFERENCES pens (farm_id, id) ON DELETE SET NULL (old_pen_id),
+  FOREIGN KEY (farm_id, new_pen_id) REFERENCES pens (farm_id, id) ON DELETE RESTRICT
 );
 
 -- ============================================================
@@ -744,6 +835,31 @@ BEGIN
     END IF;
     RETURN OLD;
   END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE 'plpgsql';
+
+-- Keeps pens.is_occupied in step with the live pigs in each pen, so application
+-- code never has to recompute it after an insert, transfer or removal.
+CREATE OR REPLACE FUNCTION sync_pen_occupancy()
+RETURNS TRIGGER AS $$
+DECLARE
+  affected UUID[];
+BEGIN
+  IF TG_OP IN ('UPDATE', 'DELETE') THEN
+    affected := array_append(affected, OLD.pen_id);
+  END IF;
+  IF TG_OP IN ('INSERT', 'UPDATE') THEN
+    affected := array_append(affected, NEW.pen_id);
+  END IF;
+  UPDATE pens p
+  SET is_occupied = EXISTS (
+    SELECT 1 FROM pigs WHERE pen_id = p.id AND is_deleted = 0
+  )
+  WHERE p.id = ANY(affected)
+    AND p.is_occupied IS DISTINCT FROM EXISTS (
+      SELECT 1 FROM pigs WHERE pen_id = p.id AND is_deleted = 0
+    );
   RETURN NULL;
 END;
 $$ LANGUAGE 'plpgsql';
@@ -851,13 +967,19 @@ BEFORE UPDATE ON alerts
 FOR EACH ROW EXECUTE FUNCTION update_updated_on_column();
 
 -- ============================================================
--- TRIGGERS: row occupied count
+-- TRIGGERS: row occupied count and pen occupancy
 -- ============================================================
 DROP TRIGGER IF EXISTS update_pens_occupied ON pens;
 CREATE TRIGGER update_pens_occupied
 AFTER INSERT OR UPDATE OF is_occupied, is_deleted, row_id OR DELETE
 ON pens
 FOR EACH ROW EXECUTE FUNCTION update_row_occupied();
+
+DROP TRIGGER IF EXISTS sync_pen_occupancy ON pigs;
+CREATE TRIGGER sync_pen_occupancy
+AFTER INSERT OR UPDATE OF pen_id, is_deleted OR DELETE
+ON pigs
+FOR EACH ROW EXECUTE FUNCTION sync_pen_occupancy();
 
 -- ============================================================
 -- TRIGGERS: pig birth stats
@@ -872,85 +994,66 @@ FOR EACH ROW EXECUTE FUNCTION update_pig_birth_stats();
 -- ============================================================
 -- INDEXES
 -- ============================================================
-CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions(status);
 
-CREATE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE is_deleted = 0;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email_lower ON users (lower(email));
 CREATE INDEX IF NOT EXISTS idx_users_farm_id ON users(farm_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_users_subscription_start ON users(subscription_start) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_users_subscription_end ON users(subscription_end) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_users_active_created ON users (created_at DESC) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_users_role ON users (role_id) WHERE is_deleted = 0;
 
-CREATE INDEX IF NOT EXISTS idx_farms_created_by ON farms(created_by) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_farms_owner_created ON farms (created_by, created_at DESC) WHERE is_deleted = 0;
 
 CREATE INDEX IF NOT EXISTS idx_rows_farm_id ON rows(farm_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_rows_name ON rows(name) WHERE is_deleted = 0;
 
 CREATE INDEX IF NOT EXISTS idx_pens_row_id ON pens(row_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_pens_farm_id ON pens(farm_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_pens_name ON pens(name) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_pens_is_occupied ON pens(is_occupied) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_pens_farm_id ON pens(farm_id, level, position) WHERE is_deleted = 0;
 
-CREATE INDEX IF NOT EXISTS idx_pigs_farm_id ON pigs(farm_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_pigs_pig_id ON pigs(pig_id) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_pigs_farm_created ON pigs(farm_id, created_at DESC) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_pigs_farm_status ON pigs (farm_id, status) WHERE is_deleted = 0;
 CREATE INDEX IF NOT EXISTS idx_pigs_pen_id ON pigs(pen_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_pigs_status ON pigs(status) WHERE is_deleted = 0;
 
-CREATE INDEX IF NOT EXISTS idx_pen_pig_history_pen_id ON pen_pig_history(pen_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_pen_pig_history_pig_id ON pen_pig_history(pig_id) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_pen_pig_history_pen ON pen_pig_history(farm_id, pen_id) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_pen_pig_history_pig ON pen_pig_history(farm_id, pig_id) WHERE is_deleted = 0;
 
-CREATE INDEX IF NOT EXISTS idx_breeding_records_farm_id ON breeding_records(farm_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_breeding_records_sow_id ON breeding_records(sow_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_breeding_records_boar_id ON breeding_records(boar_id) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_breeding_records_farm ON breeding_records(farm_id, created_at DESC) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_breeding_records_sow ON breeding_records(farm_id, sow_id) WHERE is_deleted = 0;
 
-CREATE INDEX IF NOT EXISTS idx_piglet_records_breeding_record_id ON piglet_records(breeding_record_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_piglet_records_farm_id ON piglet_records(farm_id) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_piglet_records_breeding ON piglet_records(breeding_record_id) WHERE is_deleted = 0;
 
-CREATE INDEX IF NOT EXISTS idx_health_records_pig_id ON health_records(pig_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_health_records_date ON health_records(date) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_health_records_farm_date ON health_records(farm_id, date DESC) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_health_records_pig ON health_records(farm_id, pig_id) WHERE is_deleted = 0;
 
-CREATE INDEX IF NOT EXISTS idx_feeding_records_pig_id ON feeding_records(pig_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_feeding_records_pen_id ON feeding_records(pen_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_feeding_records_date ON feeding_records(feeding_time) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_feeding_records_record_type ON feeding_records(record_type) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_feeding_records_farm_id ON feeding_records(farm_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_feeding_records_start_date ON feeding_records(start_date) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_feeding_schedules_pig ON feeding_schedules(farm_id, pig_id) WHERE is_deleted = 0;
 
-CREATE INDEX IF NOT EXISTS idx_earnings_records_farm_id ON earnings_records(farm_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_earnings_records_date ON earnings_records(date) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_feeding_records_farm_time ON feeding_records(farm_id, feeding_time DESC) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_feeding_records_pig ON feeding_records(farm_id, pig_id) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_feeding_records_pen ON feeding_records(farm_id, pen_id) WHERE is_deleted = 0;
 
-CREATE INDEX IF NOT EXISTS idx_production_records_farm_id ON production_records(farm_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_production_records_date ON production_records(date) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_earnings_records_farm_date ON earnings_records(farm_id, date DESC) WHERE is_deleted = 0;
 
-CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_notifications_is_read ON notifications(is_read) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_removal_records_farm ON removal_records(farm_id, date DESC) WHERE is_deleted = 0;
 
-CREATE INDEX IF NOT EXISTS idx_activity_logs_user_id ON activity_logs(user_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_activity_logs_farm_id ON activity_logs(farm_id) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_production_records_farm_date ON production_records(farm_id, date DESC) WHERE is_deleted = 0;
 
-CREATE INDEX IF NOT EXISTS idx_pig_birth_history_farm_id ON pig_birth_history(farm_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_pig_birth_history_sow_id ON pig_birth_history(sow_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_pig_birth_history_breeding_record_id ON pig_birth_history(breeding_record_id) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at DESC) WHERE is_deleted = 0;
 
-CREATE INDEX IF NOT EXISTS idx_alerts_farm_id ON alerts(farm_id) WHERE is_deleted = false;
-CREATE INDEX IF NOT EXISTS idx_alerts_alert_start_date ON alerts(alert_start_date) WHERE is_deleted = false;
+CREATE INDEX IF NOT EXISTS idx_activity_logs_farm ON activity_logs(farm_id, created_at DESC) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_activity_logs_user ON activity_logs(user_id, created_at DESC) WHERE is_deleted = 0;
+
+CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_logs (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_actor_created ON admin_audit_logs (actor_user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_pig_birth_history_sow ON pig_birth_history(farm_id, sow_id) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_pig_birth_history_breeding ON pig_birth_history(breeding_record_id) WHERE is_deleted = 0;
+
+CREATE INDEX IF NOT EXISTS idx_alerts_farm_start ON alerts(farm_id, alert_start_date) WHERE is_deleted = false;
 CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status) WHERE is_deleted = false;
-CREATE INDEX IF NOT EXISTS idx_alerts_is_active ON alerts(is_active) WHERE is_deleted = false;
 CREATE INDEX IF NOT EXISTS idx_alerts_notify_on ON alerts USING GIN (notify_on) WHERE is_deleted = false;
 
-CREATE INDEX IF NOT EXISTS idx_email_logs_farm_id ON email_logs(farm_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_email_logs_user_id ON email_logs(user_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_email_logs_date ON email_logs(date) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_email_logs_is_active ON email_logs(is_active) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_email_logs_farm_date ON email_logs(farm_id, date) WHERE is_deleted = 0;
 
-CREATE INDEX IF NOT EXISTS idx_payments_user_id ON payments(user_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_payments_farm_id ON payments(farm_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_payments_transaction_id ON payments(transaction_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_payments_checkout_request_id ON payments(checkout_request_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_payments_created_at ON payments(created_at) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_payments_user_created ON payments(user_id, created_at DESC) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_payments_status_created ON payments (status, created_at DESC) WHERE is_deleted = 0;
 
-CREATE INDEX IF NOT EXISTS idx_pig_transfer_history_farm_id ON pig_transfer_history(farm_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_pig_transfer_history_pig_id ON pig_transfer_history(pig_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_pig_transfer_history_old_pen_id ON pig_transfer_history(old_pen_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_pig_transfer_history_new_pen_id ON pig_transfer_history(new_pen_id) WHERE is_deleted = 0;
-CREATE INDEX IF NOT EXISTS idx_pig_transfer_history_transferred_at ON pig_transfer_history(transferred_at) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_pig_transfer_history_pig ON pig_transfer_history(farm_id, pig_id, transferred_at DESC) WHERE is_deleted = 0;

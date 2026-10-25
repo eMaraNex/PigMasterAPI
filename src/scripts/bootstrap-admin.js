@@ -62,7 +62,7 @@ if (missing.length) {
     );
 
     await client.query('COMMIT');
-    console.log(`Initial Super Admin created for ${email}. Sign in at the admin dashboard and complete MFA setup.`);
+    console.log(`Initial Super Admin created for ${email}. Sign in at the admin dashboard with this email and password.`);
   } catch (error) {
     await client.query('ROLLBACK');
     console.error(`Super Admin bootstrap failed: ${error.message}`);

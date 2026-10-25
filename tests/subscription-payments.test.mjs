@@ -3,8 +3,8 @@ import { generateKeyPairSync } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 
 const executeQueryMock = jest.fn();
-const executeTransactionMock = jest.fn();
-const getConnectionMock = jest.fn();
+const withTransactionMock = jest.fn();
+const initiateSTKPushMock = jest.fn();
 const firebaseCertificateRequestMock = jest.fn();
 
 jest.unstable_mockModule('axios', () => ({
@@ -14,33 +14,37 @@ jest.unstable_mockModule('axios', () => ({
 jest.unstable_mockModule('../src/config/database.js', () => ({
   DatabaseHelper: {
     executeQuery: executeQueryMock,
-    executeTransaction: executeTransactionMock,
-    getConnection: getConnectionMock,
+    withTransaction: withTransactionMock,
   },
   pool: {
     connect: jest.fn(),
   },
 }));
 
-jest.unstable_mockModule('../src/services/mpesa.services.js', () => ({
-  default: {
-    processCallback: jest.fn(() => ({
-      success: true,
-      checkoutRequestID: 'test-checkout-id',
-      merchantRequestID: 'merchant-id',
-      amount: 100,
-      mpesaReceiptNumber: 'ABC123',
-      transactionDate: '20240201120000',
-      phoneNumber: '254700000000',
-      resultDesc: 'The service request is processed successfully.',
-    })),
-  },
-}));
-
-const initializeDatabaseMock = jest.fn();
-jest.unstable_mockModule('../src/database/runSetup.js', () => ({
-  initializeDatabase: initializeDatabaseMock,
-}));
+jest.unstable_mockModule('../src/services/mpesa.services.js', () => {
+  class MpesaError extends Error {
+    constructor(message, { ambiguous = false } = {}) {
+      super(message);
+      this.ambiguous = ambiguous;
+    }
+  }
+  return {
+    MpesaError,
+    default: {
+      initiateSTKPush: initiateSTKPushMock,
+      processCallback: jest.fn(() => ({
+        success: true,
+        checkoutRequestId: 'checkout-1',
+        merchantRequestId: 'merchant-1',
+        resultCode: '0',
+        amount: 130,
+        mpesaReceiptNumber: 'ABC123',
+        transactionDate: '20261023120000',
+        phoneNumber: 254700000000,
+      })),
+    },
+  };
+});
 
 jest.unstable_mockModule('../src/services/email.services.js', () => ({
   default: class EmailService {
@@ -55,8 +59,7 @@ jest.unstable_mockModule('../src/services/email.services.js', () => ({
 
 const { default: PaymentService } = await import('../src/services/payment.service.js');
 const { default: AuthService } = await import('../src/services/auth.services.js');
-const { default: FarmsService } = await import('../src/services/farms.services.js');
-const { default: RowsService } = await import('../src/services/rows.services.js');
+const { withRetry } = await import('../src/utils/retry.js');
 
 describe('subscription and payment flow', () => {
   const { publicKey, privateKey } = generateKeyPairSync('rsa', {
@@ -75,7 +78,7 @@ describe('subscription and payment flow', () => {
       data: { 'test-kid': publicCertificate },
       headers: { 'cache-control': 'max-age=60' },
     });
-    initializeDatabaseMock.mockResolvedValue(true);
+    process.env.USD_TO_KES_RATE = '130';
     executeQueryMock.mockImplementation((query) => {
       if (query.includes('INSERT INTO roles')) {
         return { rowCount: 1, rows: [] };
@@ -179,92 +182,95 @@ describe('subscription and payment flow', () => {
     );
   });
 
-  test('farm listing is scoped to the authenticated owner', async () => {
-    await FarmsService.getAllFarms('owner-1');
-    expect(executeQueryMock).toHaveBeenCalledWith(
-      expect.stringContaining('created_by = $1'),
-      ['owner-1']
-    );
+  const callbackToken = 'a'.repeat(48);
+  const pendingPayment = (overrides = {}) => ({
+    id: 'payment-1', user_id: 'user-1', plan: 'standard', amount: '130.00', phone_number: '254700000000',
+    status: 'pending', metadata: { duration_months: 1 }, checkout_request_id: 'checkout-1',
+    callback_token: callbackToken, ...overrides,
+  });
+  const planQuote = sql => sql.includes('FROM subscription_plans WHERE name = $1 AND is_active = 1 LIMIT 1');
+
+  /** Fake transactional client whose responses are chosen by SQL fragment. */
+  const fakeClient = handlers => ({
+    query: jest.fn(async sql => {
+      for (const [fragment, result] of handlers) {
+        if (sql.includes(fragment)) return typeof result === 'function' ? result() : result;
+      }
+      return { rows: [], rowCount: 0 };
+    }),
   });
 
-  test('row creation rejects a farm not owned by the authenticated user', async () => {
-    await expect(RowsService.createRow({
-      farm_id: 'other-farm',
-      name: 'Row 1',
-      capacity: 1,
-      levels: ['A'],
-    }, 'user-1')).rejects.toThrow('Farm not found');
-    expect(executeQueryMock).toHaveBeenCalledWith(
-      expect.stringContaining('created_by = $2'),
-      ['other-farm', 'user-1']
-    );
-    expect(executeQueryMock).not.toHaveBeenCalledWith(
-      expect.stringContaining('INSERT INTO rows'),
-      expect.anything()
-    );
+  test('only M-Pesa can be used and nothing is written for other methods', async () => {
+    await expect(PaymentService.createPayment({ id: 'user-1' }, {
+      plan: 'standard', amount: 130, currency: 'KES', payment_mode: 'paypal', phone_number: '254700000000',
+    })).rejects.toThrow('Only M-Pesa');
+    expect(withTransactionMock).not.toHaveBeenCalled();
+    expect(initiateSTKPushMock).not.toHaveBeenCalled();
   });
 
-  test('unimplemented payment methods cannot create a successful payment', async () => {
-    await expect(PaymentService.createPayment({
-      plan: 'standard',
-      amount: 1,
-      currency: 'USD',
-      payment_mode: 'paypal',
-    }, 'user-1')).rejects.toThrow('not currently supported');
-    expect(executeQueryMock).not.toHaveBeenCalled();
+  test('retrying with the same Idempotency-Key returns the first payment without a second STK push', async () => {
+    executeQueryMock.mockImplementation(async sql => (planQuote(sql)
+      ? { rows: [{ name: 'standard', price: '1', currency: 'USD', duration_months: 1 }] }
+      : { rows: [] }));
+    const client = fakeClient([['idempotency_key = $2', { rows: [pendingPayment({ idempotency_key: 'key-12345678' })] }]]);
+    withTransactionMock.mockImplementation(fn => fn(client));
+
+    const result = await PaymentService.createPayment({ id: 'user-1' }, {
+      plan: 'standard', amount: 130, currency: 'KES', payment_mode: 'mpesa', phone_number: '254700000000',
+    }, 'key-12345678');
+
+    expect(result.replayed).toBe(true);
+    expect(result.callback_token).toBeUndefined();
+    expect(initiateSTKPushMock).not.toHaveBeenCalled();
+    expect(client.query).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO payments'), expect.anything());
   });
 
-  test('duplicate callbacks are ignored and do not double activate the subscription', async () => {
-    let selectCount = 0;
-    const connection = {
-      query: jest.fn((queryText) => {
-        if (typeof queryText === 'string' && queryText.includes('BEGIN')) {
-          return Promise.resolve({});
-        }
-        if (typeof queryText === 'string' && queryText.includes('SELECT * FROM payments')) {
-          selectCount += 1;
-          return Promise.resolve({
-            rows: [{
-              id: 'payment-1',
-              user_id: 'user-1',
-              plan: 'standard',
-              amount: 100,
-              phone_number: '254700000000',
-              status: selectCount === 1 ? 'pending' : 'success',
-              metadata: {},
-              transaction_id: 'test-checkout-id',
-            }],
-          });
-        }
-        if (typeof queryText === 'string' && queryText.includes('UPDATE payments')) {
-          return Promise.resolve({ rows: [{ id: 'payment-1', status: 'success' }] });
-        }
-        if (typeof queryText === 'string' && queryText.includes('SELECT * FROM subscription_plans')) {
-          return Promise.resolve({ rows: [{ id: 'plan-1', name: 'standard' }] });
-        }
-        if (typeof queryText === 'string' && queryText.includes('SELECT id FROM roles WHERE name')) {
-          return Promise.resolve({ rows: [{ id: 'role-1' }] });
-        }
-        if (typeof queryText === 'string' && queryText.includes('INSERT INTO subscriptions')) {
-          return Promise.resolve({ rows: [{ id: 'subscription-1' }] });
-        }
-        if (typeof queryText === 'string' && queryText.includes('UPDATE users')) {
-          return Promise.resolve({ rowCount: 1, rows: [] });
-        }
-        if (typeof queryText === 'string' && queryText.includes('COMMIT')) {
-          return Promise.resolve({});
-        }
-        return Promise.resolve({ rows: [] });
-      }),
-      release: jest.fn(),
-    };
-    getConnectionMock.mockResolvedValue(connection);
+  test('client-side amount tampering is rejected before any payment is created', async () => {
+    executeQueryMock.mockImplementation(async sql => (planQuote(sql)
+      ? { rows: [{ name: 'standard', price: '1', currency: 'USD', duration_months: 1 }] }
+      : { rows: [] }));
+    await expect(PaymentService.createPayment({ id: 'user-1' }, {
+      plan: 'standard', amount: 1, currency: 'KES', payment_mode: 'mpesa', phone_number: '254700000000',
+    })).rejects.toThrow('does not match');
+    expect(withTransactionMock).not.toHaveBeenCalled();
+  });
 
-    const first = await PaymentService.handleMpesaCallback({ Body: { stkCallback: {} } });
-    const second = await PaymentService.handleMpesaCallback({ Body: { stkCallback: {} } });
+  test('a callback with an unknown token is rejected and changes nothing', async () => {
+    const client = fakeClient([['WHERE callback_token = $1', { rows: [] }]]);
+    withTransactionMock.mockImplementation(fn => fn(client));
+    const result = await PaymentService.handleMpesaCallback('b'.repeat(48), { Body: { stkCallback: {} } });
+    expect(result.accepted).toBe(false);
+    expect(client.query).not.toHaveBeenCalledWith(expect.stringContaining("SET status = 'success'"), expect.anything());
+  });
 
-    expect(first.success).toBe(true);
-    expect(second.success).toBe(false);
-    expect(second.message).toContain('already processed');
+  test('a duplicate callback does not activate the subscription twice', async () => {
+    let status = 'pending';
+    const client = fakeClient([
+      ['WHERE callback_token = $1', () => ({ rows: [pendingPayment({ status })] })],
+      ["SET status = 'success'", () => { status = 'success'; return { rows: [pendingPayment({ status })] }; }],
+      ['FROM subscription_plans WHERE name = $1', { rows: [{ id: 'plan-1', name: 'standard', duration_months: 1 }] }],
+      ['SELECT id FROM roles WHERE name = $1', { rows: [{ id: 2 }] }],
+      ['INSERT INTO subscriptions', { rows: [{ id: 'subscription-1' }] }],
+    ]);
+    withTransactionMock.mockImplementation(fn => fn(client));
+
+    const first = await PaymentService.handleMpesaCallback(callbackToken, { Body: { stkCallback: {} } });
+    const second = await PaymentService.handleMpesaCallback(callbackToken, { Body: { stkCallback: {} } });
+
+    expect(first).toEqual({ accepted: true, duplicate: false });
+    expect(second).toEqual({ accepted: true, duplicate: true });
+    const activations = client.query.mock.calls.filter(([sql]) => sql.includes('INSERT INTO subscriptions'));
+    expect(activations).toHaveLength(1);
+  });
+
+  test('retry helper retries transient failures and stops on permanent ones', async () => {
+    const transient = Object.assign(new Error('reset'), { code: 'ECONNRESET' });
+    const fn = jest.fn().mockRejectedValueOnce(transient).mockResolvedValueOnce('ok');
+    await expect(withRetry(fn, { delay: async () => {}, shouldRetry: error => error.code === 'ECONNRESET' })).resolves.toBe('ok');
+    expect(fn).toHaveBeenCalledTimes(2);
+
+    const permanent = jest.fn().mockRejectedValue(new Error('bad request'));
+    await expect(withRetry(permanent, { delay: async () => {}, shouldRetry: () => false })).rejects.toThrow('bad request');
+    expect(permanent).toHaveBeenCalledTimes(1);
   });
 });

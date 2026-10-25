@@ -10,8 +10,7 @@
     "migrate": "node-pg-migrate up --migrations-dir src/database/migrations --migrations-table pgmigrations --migration-file-extension .js --config migrations-config.js",
     "migrate:down": "node-pg-migrate down --migrations-dir src/database/migrations --migrations-table pgmigrations --migration-file-extension .js --config migrations-config.js",
     "admin:bootstrap": "node src/scripts/bootstrap-admin.js",
-    "seed": "node src/database/seed.js",
-    "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --detectOpenHandles",
+    "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --runInBand",
     "test:watch": "jest --watch",
     "lint": "eslint .",
     "lint:fix": "eslint src/ --fix"

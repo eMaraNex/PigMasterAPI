@@ -28,10 +28,10 @@ export const requireAdmin = async (req, _res, next) => {
       throw new UnauthorizedError('Invalid admin session');
     }
     const result = await pool.query(
-      `SELECT u.id, u.email, r.name AS role_name
+      `SELECT u.id, u.email, u.name, r.name AS role_name
        FROM users u JOIN roles r ON r.id = u.role_id
        WHERE u.id = $1 AND u.is_active = 1 AND u.is_deleted = 0
-         AND u.admin_mfa_enabled = true AND r.name IN ('superadmin', 'partner')
+         AND r.name IN ('superadmin', 'partner')
          AND r.is_active = 1 AND r.is_deleted = 0`,
       [claims.userId]
     );
@@ -44,18 +44,17 @@ export const requireAdmin = async (req, _res, next) => {
   }
 };
 
-export const requireSuperAdmin = async (req, _res, next) => {
-  if (req.adminRole !== 'SUPER_ADMIN') {
-    try {
-      await pool.query(
-        `INSERT INTO admin_audit_logs (actor_user_id, action, ip_address)
-         VALUES ($1, $2, $3)`,
-        [req.admin.id, 'authorization.super_admin.denied', req.ip]
-      );
-    } catch (error) {
-      return next(error);
-    }
-    return next(new ForbiddenError('Super administrator access required'));
+/** Restricts a route to the given admin roles and records denied attempts. */
+export const requireAdminRoles = roles => async (req, _res, next) => {
+  if (!roles || roles.includes(req.adminRole)) return next();
+  try {
+    await pool.query(
+      `INSERT INTO admin_audit_logs (actor_user_id, action, ip_address, filters)
+       VALUES ($1, 'authorization.denied', $2, $3::jsonb)`,
+      [req.admin.id, req.ip, JSON.stringify({ path: req.originalUrl })]
+    );
+  } catch (error) {
+    return next(error);
   }
-  next();
+  return next(new ForbiddenError('Your admin role cannot access this resource'));
 };

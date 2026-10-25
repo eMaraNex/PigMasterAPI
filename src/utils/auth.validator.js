@@ -41,7 +41,10 @@ export const loginSchema = Joi.object({
 }).strict();
 
 export const ssoSchema = Joi.object({
-    idToken: Joi.string().min(1).max(8192).required()
+    idToken: Joi.string().min(1).max(8192).required(),
+    // Sent when the sign-in screen showed the Terms/Privacy notice; recorded for new accounts.
+    privacy_policy_accepted: Joi.boolean(),
+    marketing_consent: Joi.boolean(),
 }).strict();
 
 export const forgotPasswordSchema = Joi.object({
@@ -79,6 +82,7 @@ export const updateProfileSchema = Joi.object({
         language: Joi.string().max(10),
         date_format: Joi.string().valid('DD/MM/YYYY', 'MM/DD/YYYY', 'YYYY-MM-DD'),
     }),
+    marketing_consent: Joi.boolean(),
 }).min(1);
 
 export const changePasswordSchema = Joi.object({

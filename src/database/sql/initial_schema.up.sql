@@ -160,6 +160,30 @@ CREATE INDEX IF NOT EXISTS idx_farm_members_role ON farm_members (farm_role_id);
 
 
 -- ============================================================
+-- USER CONSENTS (append-only evidence of what each person agreed to)
+--
+-- One row per decision: accepting the privacy policy/terms at sign-up, opting in to or
+-- withdrawing from marketing. The latest row per (user, consent_type) is the current state.
+-- Rows are never updated, so the history can be shown to the user or a regulator.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS user_consents (
+  id           UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id      UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  consent_type VARCHAR(30)  NOT NULL CHECK (consent_type IN ('privacy_policy', 'terms', 'marketing')),
+  granted      BOOLEAN      NOT NULL,
+  -- Version (date) of the document the person saw.
+  version      VARCHAR(20)  NOT NULL,
+  source       VARCHAR(30)  NOT NULL CHECK (source IN ('registration', 'google_sign_in', 'settings', 'team_invite', 'admin')),
+  ip_address   INET,
+  user_agent   TEXT,
+  created_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_consents_user ON user_consents (user_id, consent_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_consents_created ON user_consents (created_at DESC);
+
+
+-- ============================================================
 -- PASSWORD RESETS
 -- ============================================================
 CREATE TABLE IF NOT EXISTS password_resets (

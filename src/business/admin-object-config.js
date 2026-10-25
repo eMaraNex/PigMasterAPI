@@ -15,6 +15,53 @@ const NOT_STAFF = "(SELECT id FROM roles WHERE name IN ('superadmin', 'partner')
 const PERMISSION_KEY = Joi.string().max(100).pattern(/^(\*|(\*|[a-z_]+)\.(\*|read|create|update|delete|export))$/);
 const permissionCatalog = () => buildPermissionCatalog(farmObjectConfigs);
 
+/** Everything support staff need about one farm: owner, plan, herd, team, money and activity. */
+const farmProfile = async id => {
+  if (!/^[0-9a-f-]{36}$/i.test(String(id))) throw new ValidationError('Invalid farm id');
+  const q = (sql, params = [id]) => DatabaseHelper.executeQuery(sql, params).then(result => result.rows);
+  const [farm] = await q(
+    `SELECT f.id, f.name, f.location, f.latitude::float AS lat, f.longitude::float AS lng, f.size, f.currency, f.timezone,
+            f.description, f.created_at, f.is_active,
+            o.id AS owner_id, o.name AS owner_name, o.email AS owner_email, o.phone AS owner_phone, o.last_login AS owner_last_login,
+            o.created_at AS owner_joined, o.subscription_end,
+            (SELECT s.current_plan FROM subscriptions s WHERE s.user_id = o.id AND s.is_active = 1 ORDER BY s.created_at DESC LIMIT 1) AS plan,
+            (SELECT s.status FROM subscriptions s WHERE s.user_id = o.id AND s.is_active = 1 ORDER BY s.created_at DESC LIMIT 1) AS plan_status
+     FROM farms f LEFT JOIN users o ON o.id = f.created_by
+     WHERE f.id = $1 AND f.is_deleted = 0`
+  );
+  if (!farm) throw new ValidationError('Farm not found');
+  const [herd, team, payments, activity, monthly] = await Promise.all([
+    q(`SELECT
+         (SELECT COUNT(*)::int FROM pigs WHERE farm_id = $1 AND is_deleted = 0) AS pigs,
+         (SELECT COUNT(*)::int FROM pigs WHERE farm_id = $1 AND is_deleted = 0 AND gender = 'female') AS females,
+         (SELECT COUNT(*)::int FROM pigs WHERE farm_id = $1 AND is_deleted = 0 AND gender = 'male') AS males,
+         (SELECT COUNT(*)::int FROM pigs WHERE farm_id = $1 AND is_deleted = 0 AND is_pregnant) AS pregnant,
+         (SELECT COUNT(*)::int FROM rows WHERE farm_id = $1 AND is_deleted = 0) AS rows,
+         (SELECT COUNT(*)::int FROM pens WHERE farm_id = $1 AND is_deleted = 0) AS pens,
+         (SELECT COUNT(*)::int FROM pens WHERE farm_id = $1 AND is_deleted = 0 AND is_occupied) AS occupied_pens,
+         (SELECT COALESCE(SUM(number_of_piglets), 0)::int FROM breeding_records WHERE farm_id = $1 AND is_deleted = 0 AND actual_birth_date > CURRENT_DATE - 365) AS piglets_12m,
+         (SELECT COUNT(*)::int FROM removal_records WHERE farm_id = $1 AND is_deleted = 0 AND reason = 'sale' AND date > CURRENT_DATE - 365) AS sold_12m,
+         (SELECT COUNT(*)::int FROM removal_records WHERE farm_id = $1 AND is_deleted = 0 AND reason LIKE 'death%' AND date > CURRENT_DATE - 365) AS deaths_12m,
+         (SELECT COALESCE(SUM(amount), 0)::float FROM earnings_records WHERE farm_id = $1 AND is_deleted = 0 AND date > CURRENT_DATE - 365) AS income_12m,
+         (SELECT COUNT(*)::int FROM health_records WHERE farm_id = $1 AND is_deleted = 0 AND date > CURRENT_DATE - 365) AS health_12m,
+         (SELECT MAX(created_at) FROM activity_logs WHERE farm_id = $1) AS last_activity`),
+    q(`SELECT m.id, u.name, u.email, fr.name AS role, m.status, m.joined_at, u.last_login, (f.created_by = u.id) AS is_owner
+       FROM farm_members m JOIN users u ON u.id = m.user_id JOIN farm_roles fr ON fr.id = m.farm_role_id JOIN farms f ON f.id = m.farm_id
+       WHERE m.farm_id = $1 ORDER BY (f.created_by = u.id) DESC, m.joined_at`),
+    q(`SELECT id, plan, amount::float, currency, status, mpesa_receipt_number, created_at
+       FROM payments WHERE user_id = $1 AND is_deleted = 0 ORDER BY created_at DESC LIMIT 10`, [farm.owner_id]),
+    q(`SELECT a.action, a.entity_type, a.created_at, u.name AS user_name
+       FROM activity_logs a LEFT JOIN users u ON u.id = a.user_id
+       WHERE a.farm_id = $1 AND a.is_deleted = 0 ORDER BY a.created_at DESC LIMIT 15`),
+    q(`SELECT to_char(m, 'YYYY-MM') AS month,
+              COALESCE((SELECT SUM(amount)::float FROM earnings_records e WHERE e.farm_id = $1 AND e.is_deleted = 0 AND date_trunc('month', e.date) = m), 0) AS income,
+              (SELECT COUNT(*)::int FROM health_records h WHERE h.farm_id = $1 AND h.is_deleted = 0 AND date_trunc('month', h.date) = m) AS health
+       FROM generate_series(date_trunc('month', CURRENT_DATE) - INTERVAL '11 months', date_trunc('month', CURRENT_DATE), INTERVAL '1 month') AS m
+       ORDER BY m`),
+  ]);
+  return { farm, herd: herd[0], team, payments, activity, monthly };
+};
+
 /** Farm locations for the admin map, plus how many farms have no coordinates yet. */
 const farmMap = async () => {
   const { rows } = await DatabaseHelper.executeQuery(
@@ -65,6 +112,18 @@ export const adminObjectConfigs = {
         sql: `(SELECT COUNT(*)::int FROM pigs cp JOIN farms cf ON cf.id = cp.farm_id
                WHERE cf.created_by = u.id AND cf.is_deleted = 0 AND cp.is_deleted = 0)`,
       },
+      privacy_accepted_at: {
+        type: 'datetime',
+        sortable: false,
+        sql: `(SELECT MAX(c.created_at) FROM user_consents c
+               WHERE c.user_id = u.id AND c.consent_type = 'privacy_policy' AND c.granted)`,
+      },
+      marketing_consent: {
+        type: 'boolean',
+        sortable: false,
+        sql: `COALESCE((SELECT c.granted FROM user_consents c WHERE c.user_id = u.id AND c.consent_type = 'marketing'
+               ORDER BY c.created_at DESC LIMIT 1), false)`,
+      },
       subscription_status: {
         sortable: false,
         sql: `COALESCE((SELECT s.status FROM subscriptions s WHERE s.user_id = u.id AND s.is_active = 1
@@ -88,6 +147,8 @@ export const adminObjectConfigs = {
         { field: 'farm_count', header: 'Farms' },
         { field: 'pig_count', header: 'Pigs' },
         { field: 'last_login', header: 'Last login' },
+        { field: 'privacy_accepted_at', header: 'Privacy policy accepted' },
+        { field: 'marketing_consent', header: 'Marketing consent' },
         { field: 'created_at', header: 'Joined' },
       ],
     },
@@ -134,7 +195,10 @@ export const adminObjectConfigs = {
         columns: { owner_name: { sql: 'o.name', searchable: true }, owner_email: { sql: 'o.email', searchable: true } },
       },
     ],
-    actions: [{ method: 'get', path: '/map', handler: () => farmMap() }],
+    actions: [
+      { method: 'get', path: '/map', handler: () => farmMap() },
+      { method: 'get', path: '/profile/:id', handler: (ctx, req) => farmProfile(req.params.id) },
+    ],
   },
 
   // Roles farm admins can give their team. Only platform admins define what each role may do.
@@ -293,6 +357,46 @@ export const adminObjectConfigs = {
           [plan.name, `${plan.name} subscription tier`]
         );
       },
+    },
+  },
+
+  // Append-only record of privacy/terms acceptance and marketing opt-ins/outs.
+  consents: {
+    path: 'consents',
+    table: 'user_consents',
+    alias: 'uc',
+    label: 'Consent',
+    adminRoles: SUPER_ADMIN,
+    operations: ['list', 'get', 'export'],
+    audit: false,
+    defaultSort: { field: 'created_at', order: 'DESC' },
+    hiddenFields: ['user_agent'],
+    columns: {
+      consent_type: {},
+      granted: { type: 'boolean' },
+      version: {},
+      source: {},
+      ip_address: { sortable: false },
+      user_agent: { sortable: false, filterable: false },
+      created_at: { type: 'datetime' },
+    },
+    joins: [
+      {
+        table: 'users', alias: 'cu', on: 'cu.id = uc.user_id',
+        columns: { user_name: { sql: 'cu.name', searchable: true }, user_email: { sql: 'cu.email', searchable: true } },
+      },
+    ],
+    export: {
+      columns: [
+        { field: 'user_name', header: 'Name' },
+        { field: 'user_email', header: 'Email' },
+        { field: 'consent_type', header: 'Consent' },
+        { field: 'granted', header: 'Granted' },
+        { field: 'version', header: 'Policy version' },
+        { field: 'source', header: 'Where' },
+        { field: 'ip_address', header: 'IP address' },
+        { field: 'created_at', header: 'When' },
+      ],
     },
   },
 

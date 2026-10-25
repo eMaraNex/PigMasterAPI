@@ -26,7 +26,8 @@ const PORT = process.env.PORT || 3001;
 const isProduction = process.env.NODE_ENV === "production";
 
 // Trust the platform proxy so rate limits and audit logs see the real client IP.
-if (isProduction || process.env.VERCEL === "1") {
+// Set TRUST_PROXY=true when developing behind a tunnel such as ngrok.
+if (isProduction || process.env.VERCEL === "1" || process.env.TRUST_PROXY === "true") {
   app.set("trust proxy", 1);
 }
 

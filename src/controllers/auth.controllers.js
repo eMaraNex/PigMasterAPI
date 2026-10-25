@@ -4,6 +4,7 @@ import { SuccessResponse } from '../middleware/responses.js';
 import { ValidationError } from '../middleware/errors.js';
 import { pool } from '../config/database.js';
 import { listUserFarms } from '../business/farm-access.js';
+import { consentContext, currentConsents } from '../services/consent.service.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -20,7 +21,7 @@ class AuthController {
 
     static async register(req, res, next) {
         try {
-            const user = await AuthService.register(req.body);
+            const user = await AuthService.register(req.body, consentContext(req));
             return SuccessResponse(res, 201, 'Registration successful! Please check your email to verify your account.', user);
         } catch (error) {
             logger.error(`Register error: ${error.message}`);
@@ -186,8 +187,7 @@ class AuthController {
 
     static async ssoAuth(req, res, next) {
         try {
-            const { idToken } = req.validatedBody;
-            const result = await AuthService.ssoAuth({ idToken });
+            const result = await AuthService.ssoAuth(req.validatedBody, consentContext(req));
             AuthController.setSessionCookie(res, result.token);
 
             const message = result.user.farm_id 
@@ -210,13 +210,14 @@ class AuthController {
                 'SELECT phone, avatar_url, email_verified, preferences, provider, created_at FROM users WHERE id = $1',
                 [id]
             );
-            const farms = await listUserFarms(id);
+            const [farms, consents] = await Promise.all([listUserFarms(id), currentConsents(id)]);
             const access = req.farmAccess;
             return SuccessResponse(res, 200, 'Session restored', {
                 id, email, name, role_id, farm_id: access?.farmId ?? farm_id, role_name, permissions,
                 subscription_start, subscription_end,
                 ...profile.rows[0],
                 farms,
+                consents,
                 farm_role: access ? { key: access.roleKey, name: access.roleName, is_owner: access.isOwner } : null,
                 // "<object>.<operation>" keys, wildcards allowed ("*", "pigs.*", "*.read").
                 farm_permissions: access?.permissions ?? [],
@@ -229,7 +230,7 @@ class AuthController {
 
     static async updateProfile(req, res, next) {
         try {
-            const user = await AuthService.updateProfile(req.user.id, req.validatedBody);
+            const user = await AuthService.updateProfile(req.user.id, req.validatedBody, consentContext(req));
             return SuccessResponse(res, 200, 'Profile updated', user);
         } catch (error) {
             next(error);

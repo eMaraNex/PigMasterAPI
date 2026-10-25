@@ -6,6 +6,7 @@ import EmailService from './email.services.js';
 import logger from '../middleware/logger.js';
 import { ValidationError, NotFoundError, UnauthorizedError } from '../middleware/errors.js';
 import SubscriptionService from './subscription.service.js';
+import { recordConsents } from './consent.service.js';
 import axios from 'axios';
 
 let firebaseSigningCertificates;
@@ -75,7 +76,7 @@ class AuthService {
         email_verified = false,
         is_active = 1,
         is_deleted = 0
-    }) {
+    }, consent = {}) {
         try {
             // Insert default roles if they don't exist (using integer values for boolean columns)
             const newRole = await DatabaseHelper.executeQuery(
@@ -224,6 +225,19 @@ class AuthService {
             );
 
             const newUser = userResult.rows[0];
+
+            // Evidence of what the person agreed to, with policy version, time, IP and device.
+            await recordConsents({
+                userId,
+                source: 'registration',
+                ip: consent.ip,
+                userAgent: consent.userAgent,
+                entries: [
+                    { type: 'privacy_policy', granted: true },
+                    { type: 'terms', granted: true },
+                    { type: 'marketing', granted: Boolean(marketing_consent) },
+                ],
+            });
 
             // Send verification email
             const verifyUrl = `${process.env.PROD_BASE_URL}/api/v1/auth/verify-email/${verificationToken}`;
@@ -580,7 +594,14 @@ class AuthService {
         }
     }
 
-    static async updateProfile(userId, { name, phone, preferences }) {
+    static async updateProfile(userId, { name, phone, preferences, marketing_consent }, consent = {}) {
+        if (marketing_consent !== undefined) {
+            await recordConsents({
+                userId, source: 'settings', ip: consent.ip, userAgent: consent.userAgent,
+                entries: [{ type: 'marketing', granted: marketing_consent }],
+            });
+            preferences = { ...(preferences ?? {}), marketing_consent };
+        }
         const result = await DatabaseHelper.executeQuery(
             `UPDATE users SET
                name = COALESCE($2, name),
@@ -633,7 +654,7 @@ class AuthService {
         }
     }
 
-    static async ssoAuth({ idToken }) {
+    static async ssoAuth({ idToken, privacy_policy_accepted, marketing_consent }, consent = {}) {
         try {
             if (!idToken || typeof idToken !== 'string') {
                 throw new ValidationError('Firebase ID token is required');
@@ -692,6 +713,21 @@ class AuthService {
                 );
 
                 user = insertResult.rows[0];
+
+                // Google sign-in shows the "you agree to the Terms and Privacy Policy" notice.
+                if (privacy_policy_accepted === true) {
+                    await recordConsents({
+                        userId,
+                        source: 'google_sign_in',
+                        ip: consent.ip,
+                        userAgent: consent.userAgent,
+                        entries: [
+                            { type: 'privacy_policy', granted: true },
+                            { type: 'terms', granted: true },
+                            { type: 'marketing', granted: Boolean(marketing_consent) },
+                        ],
+                    });
+                }
 
                 // Fetch permissions
                 const permissionsResult = await DatabaseHelper.executeQuery(

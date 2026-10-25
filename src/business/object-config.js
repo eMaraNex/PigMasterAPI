@@ -9,6 +9,7 @@ import { feedingPlan, feedingRecordHooks, feedingSummary, recordFeedingRound } f
 import { exportFarmReport, farmCalendar, farmReminders, farmReport } from './hooks/reports.js';
 import { HEALTH_DUE_DATE_SQL, completeHealthItem, healthHooks, healthSummary, recordHealthForGroup } from './hooks/health.js';
 import { todaysAlerts } from './hooks/alerts.js';
+import { penProfile, pigProfile } from './hooks/profiles.js';
 import { assignableRoles, inviteMember, switchFarm, teamHooks } from './hooks/team.js';
 import { isUuid } from './helpers.js';
 
@@ -253,6 +254,9 @@ export const farmObjectConfigs = {
       }).min(1),
     },
     hooks: penHooks,
+    actions: [
+      { method: 'get', path: '/profile/:id', handler: (ctx, req) => penProfile(ctx, req.params.id) },
+    ],
   },
 
   pigs: {
@@ -322,6 +326,7 @@ export const farmObjectConfigs = {
     hooks: pigHooks,
     actions: [
       { method: 'get', path: '/statistics', handler: ctx => pigStatistics(ctx) },
+      { method: 'get', path: '/profile/:id', handler: (ctx, req, service) => pigProfile(ctx, service, req.params.id) },
       { method: 'post', path: '/transfer/:id', write: true, permission: 'update', handler: (ctx, req, service) => transferPig(ctx, service, req.params.id, req.body) },
     ],
   },

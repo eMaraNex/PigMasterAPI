@@ -6,9 +6,11 @@ import { expandRow, farmHooks, penHooks, rowHooks } from './hooks/farm-structure
 import { pigHooks, pigRemovalSchema, pigStatistics, transferPig } from './hooks/pigs.js';
 import { breedingHooks, recordLitter } from './hooks/breeding.js';
 import { feedingPlan, feedingRecordHooks, feedingSummary, recordFeedingRound } from './hooks/feeding.js';
-import { farmCalendar, farmReport } from './hooks/reports.js';
+import { exportFarmReport, farmCalendar, farmReminders, farmReport } from './hooks/reports.js';
 import { HEALTH_DUE_DATE_SQL, completeHealthItem, healthHooks, healthSummary, recordHealthForGroup } from './hooks/health.js';
 import { todaysAlerts } from './hooks/alerts.js';
+import { assignableRoles, inviteMember, switchFarm, teamHooks } from './hooks/team.js';
+import { isUuid } from './helpers.js';
 
 /*
  * Farmer-facing business objects. Each entry becomes a router mounted at
@@ -91,7 +93,7 @@ export const farmObjectConfigs = {
     table: 'farms',
     alias: 'f',
     label: 'Farm',
-    tenant: { type: 'owner', field: 'created_by' },
+    tenant: { type: 'owner', field: 'created_by', membersCanRead: true },
     softDelete: SOFT_DELETE,
     requiresFarm: false,
     enforcePlan: false,
@@ -113,6 +115,7 @@ export const farmObjectConfigs = {
         type: 'integer',
         sql: '(SELECT COUNT(*)::int FROM pigs p WHERE p.farm_id = f.id AND p.is_deleted = 0)',
       },
+      created_by: { type: 'uuid', writable: false, searchable: false },
     },
     schemas: {
       create: Joi.object({
@@ -141,6 +144,15 @@ export const farmObjectConfigs = {
       }).min(1),
     },
     hooks: farmHooks,
+    actions: [
+      {
+        method: 'post', path: '/switch/:id',
+        handler: (ctx, req) => {
+          if (!isUuid(req.params.id)) throw new ValidationError('Invalid farm');
+          return switchFarm(ctx, req.params.id);
+        },
+      },
+    ],
   },
 
   rows: {
@@ -180,7 +192,7 @@ export const farmObjectConfigs = {
     hooks: rowHooks,
     actions: [
       {
-        method: 'post', path: '/expand/:id', write: true,
+        method: 'post', path: '/expand/:id', write: true, permission: 'update',
         handler: (ctx, req, service) => expandRow(ctx, service, req.params.id, Number(req.body?.additionalCapacity)),
       },
     ],
@@ -310,7 +322,7 @@ export const farmObjectConfigs = {
     hooks: pigHooks,
     actions: [
       { method: 'get', path: '/statistics', handler: ctx => pigStatistics(ctx) },
-      { method: 'post', path: '/transfer/:id', write: true, handler: (ctx, req, service) => transferPig(ctx, service, req.params.id, req.body) },
+      { method: 'post', path: '/transfer/:id', write: true, permission: 'update', handler: (ctx, req, service) => transferPig(ctx, service, req.params.id, req.body) },
     ],
   },
 
@@ -365,7 +377,7 @@ export const farmObjectConfigs = {
     actions: [
       { method: 'get', path: '/summary', handler: ctx => healthSummary(ctx) },
       { method: 'post', path: '/bulk', write: true, handler: (ctx, req, service) => recordHealthForGroup(ctx, service, req.body) },
-      { method: 'post', path: '/complete/:id', write: true, handler: (ctx, req, service) => completeHealthItem(ctx, service, req.params.id, req.body) },
+      { method: 'post', path: '/complete/:id', write: true, permission: 'update', handler: (ctx, req, service) => completeHealthItem(ctx, service, req.params.id, req.body) },
     ],
   },
 
@@ -703,6 +715,7 @@ export const farmObjectConfigs = {
     },
     actions: [
       { method: 'get', path: '/calendar', handler: (ctx, req) => farmCalendar(ctx, req.query) },
+      { method: 'get', path: '/reminders', handler: ctx => farmReminders(ctx) },
       {
         method: 'get', path: '/today',
         handler: ctx => {
@@ -798,6 +811,58 @@ export const farmObjectConfigs = {
     tenant: FARM,
     actions: [
       { method: 'get', path: '/summary', handler: (ctx, req) => farmReport(ctx, req.query) },
+      { method: 'get', path: '/export', permission: 'export', download: true, handler: (ctx, req) => exportFarmReport(ctx, req.query) },
+    ],
+  },
+
+  // People with access to the farm. Roles come from farm_roles (managed in the admin dashboard).
+  team: {
+    path: 'team',
+    table: 'farm_members',
+    alias: 'tm',
+    label: 'Team member',
+    permissionLabel: 'Team & access',
+    tenant: FARM,
+    enforcePlan: false,
+    operations: ['list', 'get', 'update', 'delete'],
+    defaultSort: { field: 'joined_at', order: 'ASC' },
+    columns: {
+      user_id: { type: 'uuid', writable: false },
+      farm_role_id: { type: 'integer' },
+      status: {},
+      joined_at: { type: 'datetime', writable: false },
+      created_at: { type: 'datetime', writable: false },
+    },
+    joins: [
+      {
+        table: 'users', alias: 'tu', on: 'tu.id = tm.user_id',
+        columns: {
+          name: { sql: 'tu.name', searchable: true },
+          email: { sql: 'tu.email', searchable: true },
+          phone: { sql: 'tu.phone', filterable: false },
+          last_login: { sql: 'tu.last_login', type: 'datetime' },
+          password_set: { sql: '(tu.password_hash IS NOT NULL)', type: 'boolean', filterable: false, sortable: false },
+        },
+      },
+      {
+        table: 'farm_roles', alias: 'tr', on: 'tr.id = tm.farm_role_id',
+        columns: { role_key: 'tr.key', role_name: 'tr.name' },
+      },
+      {
+        table: 'farms', alias: 'tf', on: 'tf.id = tm.farm_id',
+        columns: { is_owner: { sql: '(tf.created_by = tm.user_id)', type: 'boolean', filterable: false, sortable: false } },
+      },
+    ],
+    schemas: {
+      update: Joi.object({
+        farm_role_id: Joi.number().integer().positive(),
+        status: Joi.string().valid('active', 'disabled'),
+      }).min(1),
+    },
+    hooks: teamHooks,
+    actions: [
+      { method: 'get', path: '/roles', handler: () => assignableRoles() },
+      { method: 'post', path: '/invite', write: true, handler: (ctx, req, service) => inviteMember(ctx, service, req.body) },
     ],
   },
 };

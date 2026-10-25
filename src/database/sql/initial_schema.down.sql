@@ -1,4 +1,6 @@
 DROP TABLE IF EXISTS
+  farm_members,
+  farm_roles,
   pig_transfer_history,
   email_logs,
   alerts,

@@ -3,6 +3,7 @@ import logger from '../middleware/logger.js';
 import { SuccessResponse } from '../middleware/responses.js';
 import { ValidationError } from '../middleware/errors.js';
 import { pool } from '../config/database.js';
+import { listUserFarms } from '../business/farm-access.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -202,15 +203,45 @@ class AuthController {
     }
 
     static async me(req, res, next) {
-            try {
-                const { id, email, name, role_id, farm_id, role_name, permissions,
-                    subscription_start, subscription_end } = req.user;
-                return SuccessResponse(res, 200, 'Session restored', {
-                    id, email, name, role_id, farm_id, role_name, permissions,
-                    subscription_start, subscription_end,
-                });
-            } catch (error) {
-                next(error);
+        try {
+            const { id, email, name, role_id, farm_id, role_name, permissions,
+                subscription_start, subscription_end } = req.user;
+            const profile = await pool.query(
+                'SELECT phone, avatar_url, email_verified, preferences, provider, created_at FROM users WHERE id = $1',
+                [id]
+            );
+            const farms = await listUserFarms(id);
+            const access = req.farmAccess;
+            return SuccessResponse(res, 200, 'Session restored', {
+                id, email, name, role_id, farm_id: access?.farmId ?? farm_id, role_name, permissions,
+                subscription_start, subscription_end,
+                ...profile.rows[0],
+                farms,
+                farm_role: access ? { key: access.roleKey, name: access.roleName, is_owner: access.isOwner } : null,
+                // "<object>.<operation>" keys, wildcards allowed ("*", "pigs.*", "*.read").
+                farm_permissions: access?.permissions ?? [],
+                access_control: req.accessControl ?? null,
+            });
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    static async updateProfile(req, res, next) {
+        try {
+            const user = await AuthService.updateProfile(req.user.id, req.validatedBody);
+            return SuccessResponse(res, 200, 'Profile updated', user);
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    static async changePassword(req, res, next) {
+        try {
+            await AuthService.changePassword(req.user.id, req.validatedBody);
+            return SuccessResponse(res, 200, 'Password changed', null);
+        } catch (error) {
+            next(error);
         }
     }
 }

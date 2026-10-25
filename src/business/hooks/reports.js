@@ -1,8 +1,10 @@
 import Joi from 'joi';
+import dayjs from 'dayjs';
 import { DatabaseHelper } from '../../config/database.js';
 import { ValidationError } from '../../middleware/errors.js';
 import { HEALTH_DUE_DATE_SQL } from './health.js';
 import { feedingSummary } from './feeding.js';
+import { toCsv, toXlsx, XLSX_CONTENT_TYPE } from '../helpers.js';
 
 const GESTATION_DAYS = 114;
 const WEANING_DAYS = 56;
@@ -171,4 +173,105 @@ export const farmReport = async (ctx, query) => {
       feed_kg: feedByMonth[month] ?? 0,
     })),
   };
+};
+
+const REMINDER_ORDER = { overdue: 0, due: 1 };
+
+/**
+ * What needs attention now, for the overview: overdue and upcoming health work,
+ * heat checks, farrowings and weanings (last 30 / next 14 days) plus feed that is
+ * about to run out. Done items are left out.
+ */
+export const farmReminders = async ctx => {
+  if (!ctx.farmId) throw new ValidationError('Create or select a farm first');
+  const day = 86_400_000;
+  const [calendar, feed] = await Promise.all([
+    farmCalendar(ctx, { from: new Date(Date.now() - 30 * day).toISOString(), to: new Date(Date.now() + 14 * day).toISOString() }),
+    feedingSummary(ctx, { from: new Date(Date.now() - 7 * day).toISOString() }),
+  ]);
+  // pg returns DATE columns as local midnight, so format locally (not via toISOString).
+  const today = dayjs().format('YYYY-MM-DD');
+  const reminders = calendar.events
+    .filter(event => event.status !== 'done' && event.status !== 'completed')
+    .map(event => {
+      const date = dayjs(event.date).format('YYYY-MM-DD');
+      return { ...event, date, status: date < today ? 'overdue' : 'due' };
+    });
+
+  for (const stock of feed.stock) {
+    const used = feed.by_feed_type.find(row => row.feed_type.toLowerCase().trim() === stock.feed_type.toLowerCase().trim());
+    const perDay = used ? used.kg / 7 : 0;
+    const daysLeft = perDay > 0 ? Math.floor(Math.max(stock.on_hand_kg, 0) / perDay) : null;
+    if (daysLeft !== null && daysLeft <= 7) {
+      reminders.push({
+        id: `feed-${stock.feed_type}`,
+        date: today,
+        title: `${stock.feed_type}: ${daysLeft <= 0 ? 'out of stock' : `about ${daysLeft} day${daysLeft === 1 ? '' : 's'} left`}`,
+        details: `${Math.max(stock.on_hand_kg, 0).toLocaleString()} kg in store, using about ${Math.round(perDay)} kg a day`,
+        category: 'feed',
+        severity: daysLeft <= 2 ? 'high' : 'medium',
+        status: daysLeft <= 0 ? 'overdue' : 'due',
+        pig_id: null,
+      });
+    }
+  }
+
+  reminders.sort((a, b) => (REMINDER_ORDER[a.status] ?? 2) - (REMINDER_ORDER[b.status] ?? 2) || a.date.localeCompare(b.date));
+  return {
+    overdue: reminders.filter(item => item.status === 'overdue').length,
+    upcoming: reminders.filter(item => item.status === 'due').length,
+    items: reminders.slice(0, 12),
+  };
+};
+
+/** The farm report as a CSV or a multi-sheet Excel workbook. */
+export const exportFarmReport = async (ctx, query) => {
+  const report = await farmReport(ctx, query);
+  const format = query.format === 'csv' ? 'csv' : 'xlsx';
+  // Local calendar days: the range is sent as local start/end of day.
+  const fromDay = dayjs(report.from).format('YYYY-MM-DD');
+  const toDay = dayjs(report.to).format('YYYY-MM-DD');
+  const period = `${fromDay}_${toDay}`;
+  const summary = [
+    ['Period', `${fromDay} to ${toDay}`],
+    ['Currency', report.currency],
+    ['Pigs on farm', report.herd.total],
+    ['Females / males', `${report.herd.females} / ${report.herd.males}`],
+    ['Pregnant sows', report.herd.pregnant],
+    ['Matings', report.breeding.matings],
+    ['Farrowings', report.breeding.farrowings],
+    ['Piglets born', report.breeding.piglets_born],
+    ['Average litter size', report.breeding.avg_litter_size],
+    ['Pre-weaning mortality %', report.breeding.pre_weaning_mortality_pct],
+    ['Deaths', report.mortality.deaths],
+    ['Herd mortality %', report.mortality.rate_pct],
+    ['Pigs sold', report.sales.pigs_sold],
+    ['Sales value', report.sales.sale_value],
+    ['Income', report.finance.income],
+    ['Feed used (kg)', report.feed.total_kg],
+    ['Feed per pig per day (kg)', report.feed.kg_per_pig_per_day],
+    ['Feed cost (estimated)', report.finance.feed_cost],
+    ['Margin over feed', report.finance.margin_over_feed],
+  ].map(([metric, value]) => ({ metric, value }));
+  const metricFields = [{ field: 'metric', header: 'Metric' }, { field: 'value', header: 'Value' }];
+
+  if (format === 'csv') {
+    return {
+      filename: `farm-report-${period}.csv`,
+      contentType: 'text/csv; charset=utf-8',
+      body: `${toCsv(summary, metricFields)}\n\n${toCsv(report.monthly, [
+        { field: 'month', header: 'Month' }, { field: 'income', header: 'Income' }, { field: 'feed_kg', header: 'Feed used (kg)' },
+      ])}`,
+    };
+  }
+  const body = await toXlsx([
+    { name: 'Summary', fields: metricFields, rows: summary },
+    { name: 'Monthly', fields: [{ field: 'month', header: 'Month' }, { field: 'income', header: 'Income' }, { field: 'feed_kg', header: 'Feed used (kg)' }], rows: report.monthly },
+    { name: 'Income by type', fields: [{ field: 'type', header: 'Type' }, { field: 'records', header: 'Records' }, { field: 'amount', header: 'Amount' }], rows: report.finance.by_type },
+    { name: 'Pigs leaving', fields: [{ field: 'reason', header: 'Reason' }, { field: 'pigs', header: 'Pigs' }, { field: 'sale_amount', header: 'Value' }], rows: report.removals },
+    { name: 'Feed by type', fields: [{ field: 'feed_type', header: 'Feed' }, { field: 'kg', header: 'Kg' }], rows: report.feed.by_feed_type },
+    { name: 'Health work', fields: [{ field: 'type', header: 'Type' }, { field: 'records', header: 'Treatments' }, { field: 'pigs', header: 'Pigs' }], rows: report.health },
+    { name: 'Breeds', fields: [{ field: 'breed', header: 'Breed' }, { field: 'pigs', header: 'Pigs' }], rows: report.breeds },
+  ]);
+  return { filename: `farm-report-${period}.xlsx`, contentType: XLSX_CONTENT_TYPE, body };
 };

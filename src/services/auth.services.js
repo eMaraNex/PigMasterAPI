@@ -557,9 +557,10 @@ class AuthService {
 
             const passwordHash = await bcrypt.hash(password, 12);
 
+            // The link was delivered by email, so using it also proves the address.
             await DatabaseHelper.executeQuery(
                 `UPDATE users
-                 SET password_hash = $1, updated_at = CURRENT_TIMESTAMP
+                 SET password_hash = $1, email_verified = true, updated_at = CURRENT_TIMESTAMP
                  WHERE id = $2 AND is_deleted = 0`,
                 [passwordHash, userId]
             );
@@ -577,6 +578,40 @@ class AuthService {
             logger.error(`Reset password error: ${error.message}`);
             throw error;
         }
+    }
+
+    static async updateProfile(userId, { name, phone, preferences }) {
+        const result = await DatabaseHelper.executeQuery(
+            `UPDATE users SET
+               name = COALESCE($2, name),
+               phone = CASE WHEN $3::boolean THEN NULLIF($4, '') ELSE phone END,
+               preferences = COALESCE(preferences, '{}'::jsonb) || COALESCE($5::jsonb, '{}'::jsonb),
+               updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1 AND is_deleted = 0
+             RETURNING id, email, name, phone, avatar_url, preferences`,
+            [userId, name ?? null, phone !== undefined, phone ?? null, preferences ? JSON.stringify(preferences) : null]
+        );
+        if (!result.rows.length) throw new NotFoundError('User not found');
+        return result.rows[0];
+    }
+
+    static async changePassword(userId, { current_password, new_password }) {
+        const { rows } = await DatabaseHelper.executeQuery(
+            'SELECT password_hash, provider FROM users WHERE id = $1 AND is_deleted = 0',
+            [userId]
+        );
+        if (!rows.length) throw new NotFoundError('User not found');
+        if (rows[0].provider !== 'local' || !rows[0].password_hash) {
+            throw new ValidationError('This account signs in with Google; it has no password to change');
+        }
+        if (!(await bcrypt.compare(current_password, rows[0].password_hash))) {
+            throw new ValidationError('Current password is incorrect');
+        }
+        await DatabaseHelper.executeQuery(
+            'UPDATE users SET password_hash = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+            [userId, await bcrypt.hash(new_password, 12)]
+        );
+        logger.info(`Password changed for user ${userId}`);
     }
 
     static async logout(token) {

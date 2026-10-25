@@ -1,13 +1,18 @@
 /*
- * Development-only sample data: simulates 12 months of a working piggery for an existing
- * farmer account, plus demo farmers and M-Pesa payments for the admin dashboard.
+ * Development-only sample data: simulates 12 months of a working piggery for a farmer
+ * account, plus demo farmers and M-Pesa payments for the admin dashboard.
  *
  *   npm run seed:sample -- --email=farmer@example.com [--demo-farmers=30]
+ *     [--name="Jane Farmer"] [--phone=+254700000000] [--password=...] [--farm-name="Maina Acres"]
+ *
+ * On an empty database the farmer account and farm are created (the password is printed
+ * when not given), so the whole app can be rebuilt with: migrate, admin:bootstrap, seed.
  *
  * Everything created is tagged (pig tags "S-", notes "seed:sample", demo domain) so re-running
  * replaces the previous sample without touching the farmer's own records.
  */
 import { randomBytes } from 'node:crypto';
+import bcrypt from 'bcrypt';
 import dotenv from 'dotenv';
 import { pool } from '../config/database.js';
 
@@ -389,7 +394,13 @@ const seedDemoFarmers = async (client, mode = 'create') => {
   }
   const first = ['Wanjiku', 'Otieno', 'Kamau', 'Achieng', 'Mutua', 'Njeri', 'Kiprop', 'Auma', 'Mwangi', 'Chebet', 'Wafula', 'Nduta'];
   const last = ['Maina', 'Odhiambo', 'Kariuki', 'Wekesa', 'Ndungu', 'Kimani', 'Mutiso', 'Omondi', 'Gitau', 'Rotich'];
-  const towns = ['Kiambu', 'Nakuru', 'Nyeri', 'Kisumu', 'Eldoret', 'Machakos', 'Meru', 'Thika', 'Nanyuki', 'Kakamega'];
+  // Real town coordinates (jittered per farm) so the admin farm map has something to show.
+  const towns = [
+    ['Kiambu', -1.1714, 36.8356], ['Nakuru', -0.3031, 36.08], ['Nyeri', -0.4201, 36.9476], ['Kisumu', -0.0917, 34.768],
+    ['Eldoret', 0.5143, 35.2698], ['Machakos', -1.5177, 37.2634], ['Meru', 0.047, 37.6498], ['Thika', -1.0332, 37.0693],
+    ['Nanyuki', 0.0167, 37.0727], ['Kakamega', 0.2827, 34.7519], ['Kampala', 0.3476, 32.5825], ['Arusha', -3.3869, 36.683],
+  ];
+  const jitter = () => (rand() - 0.5) * 0.16;
   const password = randomBytes(24).toString('hex');
   for (let i = 1; i <= DEMO_FARMERS; i += 1) {
     const joined = addDays(start, between(0, 355));
@@ -401,9 +412,16 @@ const seedDemoFarmers = async (client, mode = 'create') => {
       [`farmer${i}@${DEMO_DOMAIN}`, password, name, '2547' + between(10000000, 99999999),
         addDays(today, -between(0, 40)), between(3, 80), joined]
     );
+    const [town, lat, lng] = pick(towns);
     const { rows: [farm] } = await client.query(
-      `INSERT INTO farms (name, location, size, currency, timezone, created_by, created_at) VALUES ($1, $2, $3, 'KES', 'Africa/Nairobi', $4, $5) RETURNING id`,
-      [`${name.split(' ')[1]} Piggery ${i}`, pick(towns), between(1, 25), user.id, joined]
+      `INSERT INTO farms (name, location, latitude, longitude, size, currency, timezone, created_by, created_at)
+       VALUES ($1, $2, $3, $4, $5, 'KES', 'Africa/Nairobi', $6, $7) RETURNING id`,
+      [`${name.split(' ')[1]} Piggery ${i}`, town, (lat + jitter()).toFixed(6), (lng + jitter()).toFixed(6), between(1, 25), user.id, joined]
+    );
+    await client.query(
+      `INSERT INTO farm_members (farm_id, user_id, farm_role_id, status, joined_at)
+       SELECT $1, $2, id, 'active', $3 FROM farm_roles WHERE key = 'farm_admin'`,
+      [farm.id, user.id, joined]
     );
     await client.query('UPDATE users SET farm_id = $1 WHERE id = $2', [farm.id, user.id]);
     const { rows: [row] } = await client.query(
@@ -421,13 +439,70 @@ const seedDemoFarmers = async (client, mode = 'create') => {
   }
 };
 
+/** A manager and a worker on the farmer's own farm, to try roles and permissions. */
+const seedTeam = async (client, user) => {
+  // Only fills a missing location; a location the farmer entered is never changed.
+  await client.query(
+    `UPDATE farms SET latitude = -1.1714, longitude = 36.8356, location = COALESCE(NULLIF(location, ''), 'Kiambu')
+     WHERE id = $1 AND latitude IS NULL`,
+    [user.farm_id]
+  );
+  const password = randomBytes(24).toString('hex');
+  for (const [key, name, email] of [['farm_manager', 'Grace Wambui', 'manager'], ['worker', 'Peter Otieno', 'worker']]) {
+    const { rows: [member] } = await client.query(
+      `INSERT INTO users (email, password_hash, name, role_id, email_verified, farm_id, last_login)
+       VALUES ($1, $2, $3, (SELECT id FROM roles WHERE name = 'free'), true, $4, $5) RETURNING id`,
+      [`${email}@${DEMO_DOMAIN}`, password, name, user.farm_id, addDays(today, -between(0, 5))]
+    );
+    await client.query(
+      `INSERT INTO farm_members (farm_id, user_id, farm_role_id, status, invited_by, joined_at)
+       SELECT $1, $2, id, 'active', $3, $4 FROM farm_roles WHERE key = $5`,
+      [user.farm_id, member.id, user.id, addDays(today, -60), key]
+    );
+  }
+};
+
+/** Finds the farmer, creating the account and farm when they do not exist yet. */
+const ensureFarmer = async client => {
+  let { rows: [user] } = await client.query(
+    'SELECT u.id, u.farm_id FROM users u WHERE lower(u.email) = lower($1) AND u.is_deleted = 0', [EMAIL]);
+  let password = null;
+  if (!user) {
+    password = args.password ?? randomBytes(9).toString('base64url');
+    ({ rows: [user] } = await client.query(
+      `INSERT INTO users (email, password_hash, name, phone, role_id, provider, email_verified, created_at)
+       VALUES (lower($1), $2, $3, $4, (SELECT id FROM roles WHERE name = 'free'), 'local', true, $5) RETURNING id, farm_id`,
+      [EMAIL, await bcrypt.hash(password, 12), args.name ?? 'Demo Farmer', args.phone ?? null, addDays(start, -7)]
+    ));
+    // Registration starts a trial; seedPayments re-dates it before the first payment.
+    await client.query(
+      `INSERT INTO subscriptions (user_id, current_plan, status, trial_start_date, trial_end_date, payment_status)
+       VALUES ($1, 'trial', 'trial', $2, $3, 'pending')`,
+      [user.id, addDays(start, -7), addDays(start, 23)]
+    );
+  }
+  if (!user.farm_id) {
+    const { rows: [farm] } = await client.query(
+      `INSERT INTO farms (name, location, latitude, longitude, size, currency, timezone, created_by, created_at)
+       VALUES ($1, 'Kiambu', -1.1714, 36.8356, 12, 'KES', 'Africa/Nairobi', $2, $3) RETURNING id`,
+      [args['farm-name'] ?? 'Maina Acres', user.id, addDays(start, -7)]
+    );
+    await client.query(
+      `INSERT INTO farm_members (farm_id, user_id, farm_role_id, status, joined_at)
+       SELECT $1, $2, id, 'active', $3 FROM farm_roles WHERE is_owner_role`,
+      [farm.id, user.id, addDays(start, -7)]
+    );
+    await client.query('UPDATE users SET farm_id = $1 WHERE id = $2', [farm.id, user.id]);
+    user.farm_id = farm.id;
+  }
+  return { user, password };
+};
+
 const main = async () => {
   const client = await pool.connect();
   try {
-    const { rows: [user] } = await client.query(
-      'SELECT u.id, u.farm_id FROM users u WHERE lower(u.email) = lower($1) AND u.is_deleted = 0', [EMAIL]);
-    if (!user?.farm_id) throw new Error(`No farmer with a farm found for ${EMAIL}`);
     await client.query('BEGIN');
+    const { user, password } = await ensureFarmer(client);
     // Cleanup needs foreign-key cascades, so it runs before triggers are switched off.
     await cleanup(client, user.farm_id);
     await seedDemoFarmers(client, 'cleanup');
@@ -441,8 +516,10 @@ const main = async () => {
     // Advanced unlocks every screen (reports and calendar included).
     await seedPayments(client, user.id, user.farm_id, addDays(today, -180), 'advanced');
     await seedDemoFarmers(client);
+    await seedTeam(client, user);
     await client.query('COMMIT');
     console.log(`Sample data loaded for ${EMAIL}:`, farm);
+    if (password) console.log(`Created farmer account ${EMAIL} with password: ${password}`);
     console.log(`Plus ${DEMO_FARMERS} demo farmers (@${DEMO_DOMAIN}) with payments for the admin dashboard.`);
   } catch (error) {
     await client.query('ROLLBACK');

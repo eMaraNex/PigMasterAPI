@@ -95,6 +95,71 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS farm_id UUID REFERENCES farms(id) ON 
 
 
 -- ============================================================
+-- FARM ROLES & MEMBERS (role-based access inside a farm)
+--
+-- * farm_roles are defined by the platform team from the admin dashboard only.
+--   permissions is a JSON array of "<object>.<operation>" keys taken from the
+--   business-object configs, e.g. "pigs.read", "feeding_records.export".
+--   Wildcards are allowed: "*" (everything), "pigs.*", "*.read".
+-- * farm_members links users to farms with one role. The farm creator is the
+--   owner and always has full access, whatever the role says.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS farm_roles (
+  id            SERIAL       PRIMARY KEY,
+  key           VARCHAR(50)  NOT NULL UNIQUE CHECK (key ~ '^[a-z][a-z0-9_]{1,49}$'),
+  name          VARCHAR(100) NOT NULL,
+  description   TEXT,
+  permissions   JSONB        NOT NULL DEFAULT '[]'::JSONB CHECK (jsonb_typeof(permissions) = 'array'),
+  -- System roles cannot be deleted; the owner role always grants everything.
+  is_system     BOOLEAN      NOT NULL DEFAULT false,
+  is_owner_role BOOLEAN      NOT NULL DEFAULT false,
+  -- Roles farm admins may hand out when inviting team members.
+  assignable    BOOLEAN      NOT NULL DEFAULT true,
+  sort_order    INTEGER      NOT NULL DEFAULT 100,
+  is_active     INTEGER      DEFAULT 1 CHECK (is_active IN (0, 1)),
+  is_deleted    INTEGER      DEFAULT 0 CHECK (is_deleted IN (0, 1)),
+  created_at    TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at    TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_farm_roles_owner ON farm_roles (is_owner_role) WHERE is_owner_role AND is_deleted = 0;
+
+INSERT INTO farm_roles (key, name, description, permissions, is_system, is_owner_role, assignable, sort_order)
+VALUES
+  ('farm_admin', 'Farm admin', 'Owner of the farm. Full access, including team and billing.',
+    '["*"]'::JSONB, true, true, false, 1),
+  ('farm_manager', 'Farm manager', 'Runs day-to-day operations. Cannot manage the team or delete the farm.',
+    '["*.read", "*.create", "*.update", "*.export", "team.read"]'::JSONB, true, false, true, 2),
+  ('worker', 'Farm worker', 'Records feeding and health work and views the herd.',
+    '["rows.read", "pens.read", "pigs.read", "health_records.read", "health_records.create", "feeding_records.read", "feeding_records.create", "feed_stock.read", "breeding_records.read", "piglets.read", "alerts.read"]'::JSONB,
+    true, false, true, 3),
+  ('veterinarian', 'Veterinarian', 'Manages health records and checks breeding.',
+    '["rows.read", "pens.read", "pigs.read", "health_records.*", "breeding_records.read", "piglets.read", "alerts.read", "reports.read"]'::JSONB,
+    true, false, true, 4),
+  ('accountant', 'Accountant', 'Views everything and manages sales, feed purchases and reports.',
+    '["*.read", "earnings.*", "feed_stock.*", "reports.export", "removals.export"]'::JSONB, true, false, true, 5),
+  ('viewer', 'Viewer', 'Read-only access to the farm.',
+    '["*.read"]'::JSONB, true, false, true, 6)
+ON CONFLICT (key) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS farm_members (
+  id           UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  farm_id      UUID        NOT NULL REFERENCES farms(id) ON DELETE CASCADE,
+  user_id      UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  farm_role_id INTEGER     NOT NULL REFERENCES farm_roles(id),
+  status       VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'invited', 'disabled')),
+  invited_by   UUID        REFERENCES users(id) ON DELETE SET NULL,
+  joined_at    TIMESTAMP WITH TIME ZONE,
+  created_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (farm_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_farm_members_user ON farm_members (user_id) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_farm_members_role ON farm_members (farm_role_id);
+
+
+-- ============================================================
 -- PASSWORD RESETS
 -- ============================================================
 CREATE TABLE IF NOT EXISTS password_resets (

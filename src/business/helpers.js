@@ -1,3 +1,4 @@
+import ExcelJS from 'exceljs';
 import { CustomError, NotFoundError, ValidationError } from '../middleware/errors.js';
 
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/i;
@@ -207,3 +208,37 @@ export const toCsv = (rows, fields) => {
   const body = rows.map(row => fields.map(field => escape(row[field.field])).join(','));
   return [header, ...body].join('\n');
 };
+
+const cellValue = value => {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date || typeof value === 'number' || typeof value === 'boolean') return value;
+  const text = typeof value === 'object' ? JSON.stringify(value) : String(value);
+  // Same formula-injection guard as CSV: spreadsheet apps must never evaluate exported text.
+  return /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+};
+
+/**
+ * Builds an .xlsx workbook. sheets = [{ name, fields: [{ field, header }], rows }].
+ * Header rows are bold and frozen so long exports stay readable.
+ */
+export const toXlsx = async sheets => {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'PigMaster';
+  workbook.created = new Date();
+  for (const sheet of sheets) {
+    const worksheet = workbook.addWorksheet(sheet.name.replace(/[\\/?*[\]:]/g, ' ').slice(0, 31));
+    worksheet.columns = sheet.fields.map(field => ({
+      header: field.header ?? field.field,
+      key: field.field,
+      width: Math.min(40, Math.max(12, String(field.header ?? field.field).length + 4)),
+    }));
+    for (const row of sheet.rows) {
+      worksheet.addRow(Object.fromEntries(sheet.fields.map(({ field }) => [field, cellValue(row[field])])));
+    }
+    worksheet.getRow(1).font = { bold: true };
+    worksheet.views = [{ state: 'frozen', ySplit: 1 }];
+  }
+  return Buffer.from(await workbook.xlsx.writeBuffer());
+};
+
+export const XLSX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';

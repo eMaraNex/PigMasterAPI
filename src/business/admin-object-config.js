@@ -1,6 +1,9 @@
 import Joi from 'joi';
 import { schema } from './base.js';
-import { SOFT_DELETE } from './object-config.js';
+import { DatabaseHelper } from '../config/database.js';
+import { ValidationError } from '../middleware/errors.js';
+import { SOFT_DELETE, farmObjectConfigs } from './object-config.js';
+import { buildPermissionCatalog, sanitisePermissions } from './permissions.js';
 
 /*
  * Platform-admin objects, mounted at /api/v1/admin/<path>. They are not tenant
@@ -9,6 +12,25 @@ import { SOFT_DELETE } from './object-config.js';
  */
 const SUPER_ADMIN = ['SUPER_ADMIN'];
 const NOT_STAFF = "(SELECT id FROM roles WHERE name IN ('superadmin', 'partner'))";
+const PERMISSION_KEY = Joi.string().max(100).pattern(/^(\*|(\*|[a-z_]+)\.(\*|read|create|update|delete|export))$/);
+const permissionCatalog = () => buildPermissionCatalog(farmObjectConfigs);
+
+/** Farm locations for the admin map, plus how many farms have no coordinates yet. */
+const farmMap = async () => {
+  const { rows } = await DatabaseHelper.executeQuery(
+    `SELECT f.id, f.name, f.location, f.latitude::float AS lat, f.longitude::float AS lng, f.created_at,
+            o.name AS owner_name, o.email AS owner_email,
+            (SELECT COUNT(*)::int FROM pigs p WHERE p.farm_id = f.id AND p.is_deleted = 0) AS pigs
+     FROM farms f LEFT JOIN users o ON o.id = f.created_by
+     WHERE f.is_deleted = 0 AND f.latitude IS NOT NULL AND f.longitude IS NOT NULL
+     ORDER BY f.created_at DESC
+     LIMIT 20000`
+  );
+  const { rows: totals } = await DatabaseHelper.executeQuery(
+    'SELECT COUNT(*)::int AS farms, COUNT(*) FILTER (WHERE latitude IS NULL OR longitude IS NULL)::int AS unmapped FROM farms WHERE is_deleted = 0'
+  );
+  return { points: rows, ...totals[0] };
+};
 
 export const adminObjectConfigs = {
   customers: {
@@ -83,6 +105,8 @@ export const adminObjectConfigs = {
     columns: {
       name: { searchable: true },
       location: { searchable: true },
+      latitude: { type: 'number' },
+      longitude: { type: 'number' },
       size: { type: 'number' },
       currency: {},
       created_at: { type: 'datetime' },
@@ -90,6 +114,11 @@ export const adminObjectConfigs = {
         type: 'integer',
         sortable: false,
         sql: '(SELECT COUNT(*)::int FROM pigs fp WHERE fp.farm_id = f.id AND fp.is_deleted = 0)',
+      },
+      team_size: {
+        type: 'integer',
+        sortable: false,
+        sql: '(SELECT COUNT(*)::int FROM farm_members fm WHERE fm.farm_id = f.id AND fm.status = \'active\')',
       },
       pen_count: {
         type: 'integer',
@@ -105,6 +134,79 @@ export const adminObjectConfigs = {
         columns: { owner_name: { sql: 'o.name', searchable: true }, owner_email: { sql: 'o.email', searchable: true } },
       },
     ],
+    actions: [{ method: 'get', path: '/map', handler: () => farmMap() }],
+  },
+
+  // Roles farm admins can give their team. Only platform admins define what each role may do.
+  farm_roles: {
+    path: 'farm-roles',
+    table: 'farm_roles',
+    alias: 'frl',
+    label: 'Farm role',
+    adminRoles: SUPER_ADMIN,
+    idType: 'integer',
+    softDelete: SOFT_DELETE,
+    defaultSort: { field: 'sort_order', order: 'ASC' },
+    messages: { duplicate: 'A role with this key already exists' },
+    columns: {
+      key: { searchable: true },
+      name: { searchable: true },
+      description: { searchable: true },
+      permissions: { type: 'json', sortable: false, filterable: false },
+      is_system: { type: 'boolean', writable: false },
+      is_owner_role: { type: 'boolean', writable: false },
+      assignable: { type: 'boolean' },
+      sort_order: { type: 'integer' },
+      is_active: { type: 'flag' },
+      created_at: { type: 'datetime' },
+      updated_at: { type: 'datetime' },
+      member_count: {
+        type: 'integer',
+        sortable: false,
+        sql: '(SELECT COUNT(*)::int FROM farm_members m WHERE m.farm_role_id = frl.id)',
+      },
+    },
+    schemas: {
+      create: Joi.object({
+        key: Joi.string().trim().lowercase().pattern(/^[a-z][a-z0-9_]{1,49}$/).required(),
+        name: schema.text(100).min(2).required(),
+        description: schema.text(500).allow('', null),
+        permissions: Joi.array().items(PERMISSION_KEY).max(500).default([]),
+        assignable: Joi.boolean().default(true),
+        sort_order: Joi.number().integer().min(0).max(1000).default(100),
+        is_active: Joi.boolean().default(true),
+      }),
+      update: Joi.object({
+        name: schema.text(100).min(2),
+        description: schema.text(500).allow('', null),
+        permissions: Joi.array().items(PERMISSION_KEY).max(500),
+        assignable: Joi.boolean(),
+        sort_order: Joi.number().integer().min(0).max(1000),
+        is_active: Joi.boolean(),
+      }).min(1),
+    },
+    hooks: {
+      async beforeCreate(ctx, data) {
+        data.permissions = sanitisePermissions(data.permissions, permissionCatalog());
+      },
+      async beforeUpdate(ctx, role, data) {
+        if (role.is_owner_role) {
+          // The farm admin role always keeps full access and stays usable.
+          if (data.permissions !== undefined || data.is_active === false || data.assignable === true) {
+            throw new ValidationError('The farm admin role always has full access; only its name and description can change');
+          }
+        }
+        if (data.permissions !== undefined) data.permissions = sanitisePermissions(data.permissions, permissionCatalog());
+        data.updated_at = new Date();
+      },
+      async beforeDelete(ctx, role) {
+        if (role.is_system) throw new ValidationError('Built-in roles cannot be deleted; deactivate them instead');
+        const { rows } = await ctx.client.query('SELECT COUNT(*)::int AS members FROM farm_members WHERE farm_role_id = $1', [role.id]);
+        if (rows[0].members) throw new ValidationError(`${rows[0].members} team members still have this role`);
+        return 'soft';
+      },
+    },
+    actions: [{ method: 'get', path: '/catalog', handler: () => permissionCatalog() }],
   },
 
   payments: {

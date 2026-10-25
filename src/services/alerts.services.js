@@ -32,6 +32,9 @@ class AlertService {
            FROM alerts a JOIN users u ON u.id = a.user_id AND u.is_deleted = 0
            WHERE (CURRENT_TIMESTAMP AT TIME ZONE $1)::date = ANY(a.notify_on)
              AND a.status = 'pending' AND a.is_active = true AND a.is_deleted = false
+             -- Respect the user's notification settings (master switch, then per alert type).
+             AND COALESCE(u.preferences->'notifications'->>'email_alerts', 'true') <> 'false'
+             AND COALESCE(u.preferences->'notifications'->>a.alert_type, 'true') <> 'false'
            ORDER BY a.alert_start_date LIMIT 500`,
           [FARM_TIMEZONE]
         );

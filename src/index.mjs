@@ -10,6 +10,7 @@ import swaggerUi from "swagger-ui-express";
 import cron from "node-cron";
 import logger from "./middleware/logger.js";
 import authRouter from "./routes/auth.routes.js";
+import currencyRoutes from "./routes/currency.routes.js";
 import paymentRoutes from "./routes/payments.routes.js";
 import subscriptionRoutes from "./routes/subscriptions.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
@@ -90,6 +91,7 @@ const apiRouter = express.Router();
 apiRouter.use("/auth", authRouter);
 apiRouter.use("/payments", paymentRoutes);
 apiRouter.use("/subscriptions", subscriptionRoutes);
+apiRouter.use("/currency", currencyRoutes);
 apiRouter.use("/admin", adminRoutes);
 // Farm data (farms, rows, pens, pigs, health, feeding, breeding, earnings, alerts...)
 // and admin CRUD objects are generated from business/*-config.js.

@@ -4,6 +4,13 @@ import { ValidationError } from '../../middleware/errors.js';
 
 export const farmHooks = {
   async afterCreate(ctx, farm) {
+    // Whoever creates a farm is its farm admin.
+    await ctx.client.query(
+      `INSERT INTO farm_members (farm_id, user_id, farm_role_id, status, joined_at)
+       SELECT $1, $2, id, 'active', CURRENT_TIMESTAMP FROM farm_roles WHERE is_owner_role AND is_deleted = 0
+       ON CONFLICT (farm_id, user_id) DO NOTHING`,
+      [farm.id, ctx.user.id]
+    );
     // The first farm becomes the user's active farm.
     await ctx.client.query(
       'UPDATE users SET farm_id = $1 WHERE id = $2 AND farm_id IS NULL',

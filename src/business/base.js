@@ -13,7 +13,9 @@ import {
   parseSearch,
   parseSort,
   toCsv,
+  toXlsx,
   translateDbError,
+  XLSX_CONTENT_TYPE,
 } from './helpers.js';
 
 const RESERVED_QUERY_KEYS = new Set([
@@ -38,10 +40,16 @@ export class BaseBusinessLogic {
     this.primaryKey = config.primaryKey ?? 'id';
   }
 
+  assertId(id) {
+    const idType = this.config.idType ?? 'uuid';
+    if (idType === 'uuid') assertUuid(id);
+    if (idType === 'integer' && !/^[1-9][0-9]{0,9}$/.test(String(id))) throw notFound(this.config);
+  }
+
   // ---------------------------------------------------------------- scoping
 
   /** Conditions every query on this object must carry: soft delete, tenant and base filters. */
-  scopeConditions(ctx, params, alias = this.config.alias) {
+  scopeConditions(ctx, params, alias = this.config.alias, { write = false } = {}) {
     const where = [];
     const { softDelete, tenant, baseWhere } = this.config;
     if (softDelete) {
@@ -53,7 +61,12 @@ export class BaseBusinessLogic {
       where.push(`${alias}.${tenant.field} = $${params.length}`);
     } else if (tenant?.type === 'owner') {
       params.push(ctx.user.id);
-      where.push(`${alias}.${tenant.field} = $${params.length}`);
+      const owned = `${alias}.${tenant.field} = $${params.length}`;
+      // Farm team members may read the farms they belong to; only the owner may change them.
+      where.push(tenant.membersCanRead && !write
+        ? `(${owned} OR EXISTS (SELECT 1 FROM farm_members fm WHERE fm.farm_id = ${alias}.${this.primaryKey}
+             AND fm.user_id = $${params.length} AND fm.status = 'active'))`
+        : owned);
     }
     if (baseWhere) where.push(baseWhere(alias));
     return where;
@@ -144,7 +157,7 @@ export class BaseBusinessLogic {
   }
 
   async getById(ctx, id, client = null) {
-    if ((this.config.idType ?? 'uuid') === 'uuid') assertUuid(id);
+    this.assertId(id);
     const params = [id];
     const where = [`${this.config.alias}.${this.primaryKey} = $1`, ...this.scopeConditions(ctx, params)];
     const runner = client ?? DatabaseHelper;
@@ -156,9 +169,9 @@ export class BaseBusinessLogic {
 
   /** Locks the scoped base row for a write; throws 404 when it is outside the caller's tenant. */
   async lockExisting(ctx, client, id) {
-    if ((this.config.idType ?? 'uuid') === 'uuid') assertUuid(id);
+    this.assertId(id);
     const params = [id];
-    const where = [`${this.config.alias}.${this.primaryKey} = $1`, ...this.scopeConditions(ctx, params)];
+    const where = [`${this.config.alias}.${this.primaryKey} = $1`, ...this.scopeConditions(ctx, params, this.config.alias, { write: true })];
     const result = await client.query(
       `SELECT ${this.config.alias}.* FROM ${this.config.table} ${this.config.alias}
        WHERE ${where.join(' AND ')} FOR UPDATE`,
@@ -318,11 +331,15 @@ export class BaseBusinessLogic {
     if (!fields.length) throw new ValidationError('Select at least one exportable column');
 
     const result = await this.list(ctx, { ...input, page: 1, limit: EXPORT_LIMIT, pagination: undefined }, { maxLimit: EXPORT_LIMIT });
-    const format = input.format === 'json' ? 'json' : 'csv';
+    const format = ['json', 'xlsx'].includes(input.format) ? input.format : 'csv';
     const filename = `${this.objectKey}-${new Date().toISOString().slice(0, 10)}.${format}`;
     if (format === 'json') {
       const data = result.data.map(row => Object.fromEntries(fields.map(({ field }) => [field, row[field]])));
       return { filename, contentType: 'application/json', body: JSON.stringify({ total: result.total, data }), truncated: result.total > EXPORT_LIMIT };
+    }
+    if (format === 'xlsx') {
+      const body = await toXlsx([{ name: this.config.label, fields, rows: result.data }]);
+      return { filename, contentType: XLSX_CONTENT_TYPE, body, truncated: result.total > EXPORT_LIMIT };
     }
     return { filename, contentType: 'text/csv; charset=utf-8', body: toCsv(result.data, fields), truncated: result.total > EXPORT_LIMIT };
   }

@@ -5,7 +5,8 @@ import { ValidationError } from '../middleware/errors.js';
 import { expandRow, farmHooks, penHooks, rowHooks } from './hooks/farm-structure.js';
 import { pigHooks, pigRemovalSchema, pigStatistics, transferPig } from './hooks/pigs.js';
 import { breedingHooks, recordLitter } from './hooks/breeding.js';
-import { feedingRecordHooks } from './hooks/feeding.js';
+import { feedingPlan, feedingRecordHooks, feedingSummary, recordFeedingRound } from './hooks/feeding.js';
+import { farmCalendar, farmReport } from './hooks/reports.js';
 import { HEALTH_DUE_DATE_SQL, completeHealthItem, healthHooks, healthSummary, recordHealthForGroup } from './hooks/health.js';
 import { todaysAlerts } from './hooks/alerts.js';
 
@@ -426,6 +427,59 @@ export const farmObjectConfigs = {
       }).min(1),
     },
     hooks: feedingRecordHooks,
+    actions: [
+      { method: 'get', path: '/plan', handler: ctx => feedingPlan(ctx) },
+      { method: 'get', path: '/summary', handler: (ctx, req) => feedingSummary(ctx, req.query) },
+      { method: 'post', path: '/round', write: true, handler: (ctx, req, service) => recordFeedingRound(ctx, service, req.body) },
+    ],
+  },
+
+  feed_stock: {
+    path: 'feed-stock',
+    table: 'feed_inventory',
+    alias: 'fi',
+    label: 'Feed purchase',
+    tenant: FARM,
+    softDelete: SOFT_DELETE,
+    maxLimit: 500,
+    defaultSort: { field: 'purchase_date', order: 'DESC' },
+    columns: {
+      feed_type: { searchable: true },
+      brand: { searchable: true },
+      quantity: { type: 'number' },
+      unit: {},
+      cost_per_unit: { type: 'number' },
+      purchase_date: { type: 'date' },
+      expiry_date: { type: 'date' },
+      supplier: { searchable: true },
+      notes: {},
+      created_at: { type: 'datetime' },
+      total_cost: { type: 'number', sql: '(fi.quantity * COALESCE(fi.cost_per_unit, 0))' },
+    },
+    schemas: {
+      create: Joi.object({
+        feed_type: schema.text(50).required(),
+        brand: schema.text(50).allow('', null),
+        quantity: Joi.number().positive().max(100_000).required(),
+        unit: Joi.string().valid('bag_70kg', 'bag_50kg', 'bag_25kg', 'kg', 'tonne').default('bag_70kg'),
+        cost_per_unit: schema.money().allow(null),
+        purchase_date: schema.date().max('now').default(() => new Date()),
+        expiry_date: schema.date().allow(null),
+        supplier: schema.text(100).allow('', null),
+        notes: schema.notes(),
+      }),
+      update: Joi.object({
+        feed_type: schema.text(50),
+        brand: schema.text(50).allow('', null),
+        quantity: Joi.number().positive().max(100_000),
+        unit: Joi.string().valid('bag_70kg', 'bag_50kg', 'bag_25kg', 'kg', 'tonne'),
+        cost_per_unit: schema.money().allow(null),
+        purchase_date: schema.date().max('now'),
+        expiry_date: schema.date().allow(null),
+        supplier: schema.text(100).allow('', null),
+        notes: schema.notes(),
+      }).min(1),
+    },
   },
 
   feeding_schedules: {
@@ -648,6 +702,7 @@ export const farmObjectConfigs = {
       update: Joi.object({ status: Joi.string().valid('pending', 'sent', 'completed', 'rejected').required() }),
     },
     actions: [
+      { method: 'get', path: '/calendar', handler: (ctx, req) => farmCalendar(ctx, req.query) },
       {
         method: 'get', path: '/today',
         handler: ctx => {
@@ -733,6 +788,16 @@ export const farmObjectConfigs = {
       { table: 'pens', alias: 'np', on: 'np.id = pt.new_pen_id', columns: { new_pen_name: 'np.name' } },
       { table: 'users', alias: 'tu', on: 'tu.id = pt.transferred_by', columns: { transferred_by_user: { sql: 'tu.name', filterable: false } } },
       { table: 'pigs', alias: 'tp', on: 'tp.farm_id = pt.farm_id AND tp.pig_id = pt.pig_id', columns: { pig_name: 'tp.name' } },
+    ],
+  },
+
+  // Action-only object: farm performance reports aggregated in the database.
+  reports: {
+    path: 'reports',
+    label: 'Report',
+    tenant: FARM,
+    actions: [
+      { method: 'get', path: '/summary', handler: (ctx, req) => farmReport(ctx, req.query) },
     ],
   },
 };

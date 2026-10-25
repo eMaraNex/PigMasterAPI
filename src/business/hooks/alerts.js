@@ -7,7 +7,8 @@ dayjs.extend(timezone);
 
 export const FARM_TIMEZONE = 'Africa/Nairobi';
 
-export const utcDate = date => dayjs(date).utc().format('YYYY-MM-DD');
+// Calendar dates are farm-local; converting date-only values through UTC shifted them a day back.
+export const utcDate = date => dayjs(date).format('YYYY-MM-DD');
 export const displayDate = date => dayjs(date).tz(FARM_TIMEZONE).format('MMMM D, YYYY');
 
 /**

@@ -1,4 +1,5 @@
 import Joi from 'joi';
+import { clientBaseUrl } from '../../config/urls.js';
 import { randomBytes } from 'crypto';
 import { DatabaseHelper } from '../../config/database.js';
 import { ForbiddenError, ValidationError } from '../../middleware/errors.js';
@@ -77,10 +78,9 @@ export const assignableRoles = async () => {
   return rows;
 };
 
-const clientUrl = () => (process.env.NODE_ENV === 'production' ? process.env.PROD_CLIENT_BASE_URL : process.env.DEV_CLIENT_BASE_URL);
 
 const sendInviteEmail = async ({ email, name, farmName, invitedBy, roleName, setupToken }) => {
-  const url = setupToken ? `${clientUrl()}/reset-password/${setupToken}` : `${clientUrl()}/login`;
+  const url = setupToken ? `${clientBaseUrl()}/reset-password/${setupToken}` : `${clientBaseUrl()}/login`;
   const action = setupToken ? `Set your password to get started (link valid for ${INVITE_LINK_HOURS} hours)` : 'Sign in to open the farm';
   const text = `Hi ${name},\n\n${invitedBy} added you to ${farmName} on PigMaster as ${roleName}.\n${action}: ${url}\n`;
   const result = await new EmailService({}, logger).sendEmail({

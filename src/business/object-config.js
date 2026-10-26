@@ -10,7 +10,7 @@ import { exportFarmReport, farmCalendar, farmReminders, farmReport } from './hoo
 import { HEALTH_DUE_DATE_SQL, completeHealthItem, healthHooks, healthSummary, recordHealthForGroup } from './hooks/health.js';
 import { todaysAlerts } from './hooks/alerts.js';
 import { penProfile, pigProfile } from './hooks/profiles.js';
-import { assignableRoles, inviteMember, switchFarm, teamHooks } from './hooks/team.js';
+import { assignableRoles, inviteMember, resendInvite, switchFarm, teamHooks } from './hooks/team.js';
 import { isUuid } from './helpers.js';
 
 /*
@@ -868,6 +868,7 @@ export const farmObjectConfigs = {
     actions: [
       { method: 'get', path: '/roles', handler: () => assignableRoles() },
       { method: 'post', path: '/invite', write: true, handler: (ctx, req, service) => inviteMember(ctx, service, req.body) },
+      { method: 'post', path: '/resend-invite/:id', permission: 'create', handler: (ctx, req, service) => resendInvite(ctx, service, req.params.id) },
     ],
   },
 };

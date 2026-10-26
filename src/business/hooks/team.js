@@ -175,3 +175,43 @@ export const switchFarm = async (ctx, farmId) => {
   if (!rows.length) throw new ForbiddenError('You do not have access to this farm');
   return rows[0];
 };
+
+/**
+ * Sends a fresh set-password link to a team member who never finished their invite
+ * (for example because the link expired). Older unused links stop working.
+ */
+export const resendInvite = async (ctx, service, memberId) => {
+  const member = await service.getById(ctx, memberId);
+  if (member.password_set) throw new ValidationError(`${member.name} has already set a password; they can sign in or use "Forgot password"`);
+  if (member.status !== 'active') throw new ValidationError('Re-enable this member before resending the invite');
+
+  const setupToken = randomBytes(32).toString('hex');
+  await DatabaseHelper.withTransaction(async client => {
+    await client.query('UPDATE password_resets SET used = true WHERE user_id = $1 AND used = false', [member.user_id]);
+    await client.query(
+      `INSERT INTO password_resets (user_id, token, expires_at)
+       VALUES ($1, $2, CURRENT_TIMESTAMP + make_interval(hours => $3))`,
+      [member.user_id, setupToken, INVITE_LINK_HOURS]
+    );
+    await client.query(
+      `INSERT INTO activity_logs (user_id, farm_id, action, entity_type, entity_id, new_values)
+       VALUES ($1, $2, 'resend_invite', 'team', $3, $4::jsonb)`,
+      [ctx.user.id, ctx.farmId, member.id, JSON.stringify({ email: member.email })]
+    );
+  });
+
+  let emailSent = false;
+  try {
+    emailSent = await sendInviteEmail({
+      email: member.email,
+      name: member.name,
+      farmName: ctx.farmAccess.farmName,
+      invitedBy: ctx.user.name,
+      roleName: member.role_name,
+      setupToken,
+    });
+  } catch (mailError) {
+    logger.warn(`Resending invite to ${member.email} failed: ${mailError.message}`);
+  }
+  return { email: member.email, email_sent: emailSent, expires_in_hours: INVITE_LINK_HOURS };
+};

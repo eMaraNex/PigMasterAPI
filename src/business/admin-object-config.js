@@ -4,6 +4,7 @@ import { DatabaseHelper } from '../config/database.js';
 import { ValidationError } from '../middleware/errors.js';
 import { SOFT_DELETE, farmObjectConfigs } from './object-config.js';
 import { buildPermissionCatalog, sanitisePermissions } from './permissions.js';
+import { adminUserHooks, inviteAdmin, resendAdminInvite } from './hooks/admins.js';
 
 /*
  * Platform-admin objects, mounted at /api/v1/admin/<path>. They are not tenant
@@ -357,6 +358,60 @@ export const adminObjectConfigs = {
           [plan.name, `${plan.name} subscription tier`]
         );
       },
+    },
+  },
+
+  // People who can sign in to this dashboard. Super admins manage everything; partners see analytics only.
+  admins: {
+    path: 'admins',
+    table: 'users',
+    alias: 'adm',
+    label: 'Admin',
+    adminRoles: SUPER_ADMIN,
+    softDelete: SOFT_DELETE,
+    baseWhere: alias => `${alias}.role_id IN ${NOT_STAFF}`,
+    operations: ['list', 'get', 'update', 'export'],
+    defaultSort: { field: 'created_at', order: 'ASC' },
+    hiddenFields: ['password_hash', 'admin_mfa_secret', 'preferences', 'provider_id'],
+    columns: {
+      name: { searchable: true },
+      email: { searchable: true },
+      phone: {},
+      role_id: { type: 'integer', sortable: false, filterable: false },
+      is_active: { type: 'flag' },
+      last_login: { type: 'datetime' },
+      created_at: { type: 'datetime' },
+      password_set: { type: 'boolean', sortable: false, filterable: false, sql: '(adm.password_hash IS NOT NULL)' },
+    },
+    joins: [
+      {
+        table: 'roles', alias: 'admr', on: 'admr.id = adm.role_id',
+        columns: {
+          role_name: 'admr.name',
+          role: { sql: "CASE admr.name WHEN 'superadmin' THEN 'SUPER_ADMIN' ELSE 'PARTNER' END" },
+        },
+      },
+    ],
+    schemas: {
+      update: Joi.object({
+        role: Joi.string().valid('SUPER_ADMIN', 'PARTNER'),
+        is_active: Joi.boolean(),
+      }).min(1),
+    },
+    hooks: adminUserHooks,
+    actions: [
+      { method: 'post', path: '/invite', handler: (ctx, req) => inviteAdmin(ctx, req.body) },
+      { method: 'post', path: '/resend-invite/:id', handler: (ctx, req, service) => resendAdminInvite(ctx, service, req.params.id) },
+    ],
+    export: {
+      columns: [
+        { field: 'name', header: 'Name' },
+        { field: 'email', header: 'Email' },
+        { field: 'role', header: 'Role' },
+        { field: 'is_active', header: 'Active' },
+        { field: 'last_login', header: 'Last sign-in' },
+        { field: 'created_at', header: 'Added' },
+      ],
     },
   },
 

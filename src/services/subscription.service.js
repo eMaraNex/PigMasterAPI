@@ -34,8 +34,12 @@ class SubscriptionService {
 
   static async getUserSubscription(userId, client = null) {
     const result = await run(client,
-      `SELECT s.*, sp.name AS plan_name, sp.duration_months, sp.price, sp.currency
-       FROM subscriptions s LEFT JOIN subscription_plans sp ON s.plan_id = sp.id
+      `SELECT s.*, sp.name AS plan_name, sp.duration_months, sp.price, sp.currency,
+              -- Billing cycle of the payment that started this subscription (monthly / yearly).
+              COALESCE(p.metadata->>'plan_period', CASE WHEN s.status = 'active' THEN 'monthly' END) AS billing_period
+       FROM subscriptions s
+       LEFT JOIN subscription_plans sp ON s.plan_id = sp.id
+       LEFT JOIN payments p ON p.id = s.payment_id
        WHERE s.user_id = $1 AND s.is_active = 1
        ORDER BY s.created_at DESC LIMIT 1`,
       [userId]

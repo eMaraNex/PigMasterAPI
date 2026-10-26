@@ -339,6 +339,29 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 
 
 -- ============================================================
+-- SUBSCRIPTION NOTICES (trial / plan ending reminders)
+--
+-- One row per subscription and stage, so each reminder email is sent at most once
+-- even with several API instances or restarts. Stages are relative to the end date (UTC).
+-- ============================================================
+CREATE TABLE IF NOT EXISTS subscription_notices (
+  id              UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  subscription_id UUID        NOT NULL REFERENCES subscriptions(id) ON DELETE CASCADE,
+  user_id         UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind            VARCHAR(10) NOT NULL CHECK (kind IN ('trial', 'plan')),
+  stage           VARCHAR(20) NOT NULL CHECK (stage IN ('before_5', 'before_2', 'before_1', 'ended', 'after_3')),
+  ends_at         TIMESTAMP WITH TIME ZONE NOT NULL,
+  email_status    VARCHAR(10) NOT NULL DEFAULT 'pending' CHECK (email_status IN ('pending', 'sent', 'failed')),
+  created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (subscription_id, stage)
+);
+
+CREATE INDEX IF NOT EXISTS idx_subscription_notices_user ON subscription_notices (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_trial_end ON subscriptions (trial_end_date) WHERE is_active = 1;
+CREATE INDEX IF NOT EXISTS idx_subscriptions_expiry ON subscriptions (expiry_date) WHERE is_active = 1;
+
+
+-- ============================================================
 -- ROWS
 -- ============================================================
 CREATE TABLE IF NOT EXISTS rows (

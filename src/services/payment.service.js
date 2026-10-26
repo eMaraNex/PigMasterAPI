@@ -286,7 +286,16 @@ class PaymentService {
       const locked = (await client.query('SELECT * FROM payments WHERE id = $1 FOR UPDATE', [payment.id])).rows[0];
       if (verification.state === 'success') {
         const { changed } = await this.finalizePayment(client, locked, { state: 'success', source: 'callback', verified: true, ...processed });
-        if (!changed) logger.info(`Duplicate M-Pesa callback for payment ${payment.id} ignored`);
+        if (!changed) {
+          // Already confirmed by a status check (which carries no receipt): keep the receipt for audits.
+          if (locked.status === 'success' && !locked.mpesa_receipt_number && processed.mpesaReceiptNumber) {
+            await client.query(
+              `UPDATE payments SET mpesa_receipt_number = $2, metadata = metadata || $3::jsonb WHERE id = $1`,
+              [payment.id, processed.mpesaReceiptNumber, JSON.stringify({ transaction_date: processed.transactionDate ?? null, receipt_from_callback: true })]
+            );
+          }
+          logger.info(`Duplicate M-Pesa callback for payment ${payment.id} ignored`);
+        }
         return { accepted: true, duplicate: !changed };
       }
       if (verification.state === 'pending') {

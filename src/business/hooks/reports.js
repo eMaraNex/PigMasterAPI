@@ -178,6 +178,34 @@ export const farmReport = async (ctx, query) => {
 const REMINDER_ORDER = { overdue: 0, due: 1 };
 
 /**
+ * Plan / trial ending reminders for the overview, same windows as the reminder emails:
+ * from 5 days before the end until a week after it. Team members are told to ask the owner.
+ */
+const planReminders = (access, today) => {
+  if (!access) return [];
+  const { accessControl: plan, isOwner } = access;
+  const paid = plan.hasActiveSubscription || plan.subscriptionEndsAt;
+  const endsAt = paid ? plan.subscriptionEndsAt : plan.trialEndsAt;
+  if (!endsAt) return [];
+  const daysLeft = dayjs(endsAt).startOf('day').diff(dayjs(today), 'day');
+  if (daysLeft > 5 || daysLeft < -7) return [];
+  const what = paid ? 'Your plan' : 'Your free trial';
+  const ended = dayjs(endsAt).isBefore(dayjs());
+  return [{
+    id: `plan-${paid ? 'paid' : 'trial'}`,
+    date: dayjs(endsAt).format('YYYY-MM-DD'),
+    title: ended ? `${what} has ended` : daysLeft <= 0 ? `${what} ends today` : `${what} ends in ${daysLeft} day${daysLeft === 1 ? '' : 's'}`,
+    details: isOwner
+      ? (ended ? 'Renew with M-Pesa to switch premium features back on. Your records are safe.' : 'Renew with M-Pesa to avoid interruption. Yearly saves 16%.')
+      : 'Ask the farm owner to renew the plan.',
+    category: 'billing',
+    severity: ended || daysLeft <= 1 ? 'high' : 'medium',
+    status: ended ? 'overdue' : 'due',
+    pig_id: null,
+  }];
+};
+
+/**
  * What needs attention now, for the overview: overdue and upcoming health work,
  * heat checks, farrowings and weanings (last 30 / next 14 days) plus feed that is
  * about to run out. Done items are left out.
@@ -216,6 +244,7 @@ export const farmReminders = async ctx => {
     }
   }
 
+  reminders.push(...planReminders(ctx.farmAccess, today));
   reminders.sort((a, b) => (REMINDER_ORDER[a.status] ?? 2) - (REMINDER_ORDER[b.status] ?? 2) || a.date.localeCompare(b.date));
   return {
     overdue: reminders.filter(item => item.status === 'overdue').length,

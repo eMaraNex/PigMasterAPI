@@ -2,6 +2,7 @@ ALTER TABLE IF EXISTS users DROP COLUMN IF EXISTS admin_role_id;
 DROP TABLE IF EXISTS admin_roles;
 
 DROP TABLE IF EXISTS
+  subscription_notices,
   user_consents,
   farm_members,
   farm_roles,

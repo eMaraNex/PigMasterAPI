@@ -44,6 +44,7 @@ export const loadFarmAccess = async (userId, farmId, client = pool) => {
       trialEndsAt: trialEndsAt.toISOString(),
       isTrialActive: now <= trialEndsAt.getTime(),
       hasActiveSubscription: Boolean(subscriptionEnd && subscriptionEnd.getTime() >= now),
+      subscriptionEndsAt: subscriptionEnd ? subscriptionEnd.toISOString() : null,
     },
   };
 };

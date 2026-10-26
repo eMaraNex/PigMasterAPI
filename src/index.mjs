@@ -11,6 +11,7 @@ import cron from "node-cron";
 import logger from "./middleware/logger.js";
 import authRouter from "./routes/auth.routes.js";
 import currencyRoutes from "./routes/currency.routes.js";
+import { processSubscriptionReminders } from "./services/subscription-reminders.service.js";
 import paymentRoutes from "./routes/payments.routes.js";
 import subscriptionRoutes from "./routes/subscriptions.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
@@ -109,17 +110,23 @@ app.use("*", (req, res) => {
 
 app.use(errorHandler);
 
+// Every schedule runs in UTC (servers are in Germany); user-facing times are converted where shown.
+const UTC = { timezone: "UTC" };
 const startSchedulers = () => {
-  // Resolve M-Pesa payments whose callback never arrived; expire stale ones.
+  // Resolve M-Pesa payments whose callback never arrived; expire stale ones; recover late successes.
   cron.schedule("* * * * *", () => {
     PaymentService.reconcilePendingPayments().catch((error) =>
       logger.error(`Payment reconciliation failed: ${error.message}`)
     );
-  });
+  }, UTC);
   // Email farm alerts that fall due today (farm timezone).
   cron.schedule("5 * * * *", () => {
     AlertService.processDueAlerts().catch((error) => logger.error(`Alert processing failed: ${error.message}`));
-  });
+  }, UTC);
+  // Trial / plan ending reminders once a day at 06:00 UTC (09:00 in Nairobi).
+  cron.schedule("0 6 * * *", () => {
+    processSubscriptionReminders().catch((error) => logger.error(`Subscription reminders failed: ${error.message}`));
+  }, UTC);
 };
 
 if (process.env.NODE_ENV !== "test") {

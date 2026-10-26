@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken';
 const executeQueryMock = jest.fn();
 const withTransactionMock = jest.fn();
 const initiateSTKPushMock = jest.fn();
+const querySTKPushMock = jest.fn();
 const firebaseCertificateRequestMock = jest.fn();
 
 jest.unstable_mockModule('axios', () => ({
@@ -32,6 +33,7 @@ jest.unstable_mockModule('../src/services/mpesa.services.js', () => {
     MpesaError,
     default: {
       initiateSTKPush: initiateSTKPushMock,
+      querySTKPush: querySTKPushMock,
       processCallback: jest.fn(() => ({
         success: true,
         checkoutRequestId: 'checkout-1',
@@ -245,8 +247,10 @@ describe('subscription and payment flow', () => {
 
   test('a duplicate callback does not activate the subscription twice', async () => {
     let status = 'pending';
+    querySTKPushMock.mockResolvedValue({ state: 'success', resultCode: '0' });
     const client = fakeClient([
       ['WHERE callback_token = $1', () => ({ rows: [pendingPayment({ status })] })],
+      ['WHERE id = $1 FOR UPDATE', () => ({ rows: [pendingPayment({ status })] })],
       ["SET status = 'success'", () => { status = 'success'; return { rows: [pendingPayment({ status })] }; }],
       ['FROM subscription_plans WHERE name = $1', { rows: [{ id: 'plan-1', name: 'standard', duration_months: 1 }] }],
       ['SELECT id FROM roles WHERE name = $1', { rows: [{ id: 2 }] }],
@@ -261,6 +265,68 @@ describe('subscription and payment flow', () => {
     expect(second).toEqual({ accepted: true, duplicate: true });
     const activations = client.query.mock.calls.filter(([sql]) => sql.includes('INSERT INTO subscriptions'));
     expect(activations).toHaveLength(1);
+  });
+
+  test('a success callback Safaricom cannot confirm grants nothing and stays pending', async () => {
+    querySTKPushMock.mockResolvedValue({ state: 'pending' });
+    const client = fakeClient([
+      ['WHERE callback_token = $1', { rows: [pendingPayment()] }],
+      ['WHERE id = $1 FOR UPDATE', { rows: [pendingPayment()] }],
+    ]);
+    withTransactionMock.mockImplementation(fn => fn(client));
+    const result = await PaymentService.handleMpesaCallback(callbackToken, { Body: { stkCallback: {} } });
+    expect(result).toEqual({ accepted: true, verified: false });
+    expect(client.query).not.toHaveBeenCalledWith(expect.stringContaining("SET status = 'success'"), expect.anything());
+    expect(client.query).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO subscriptions'), expect.anything());
+  });
+
+  test('a forged success callback contradicted by Safaricom is flagged, not paid', async () => {
+    querySTKPushMock.mockResolvedValue({ state: 'failed', resultCode: '1032' });
+    const client = fakeClient([
+      ['WHERE callback_token = $1', { rows: [pendingPayment()] }],
+      ['WHERE id = $1 FOR UPDATE', { rows: [pendingPayment()] }],
+    ]);
+    withTransactionMock.mockImplementation(fn => fn(client));
+    await PaymentService.handleMpesaCallback(callbackToken, { Body: { stkCallback: {} } });
+    expect(client.query).not.toHaveBeenCalledWith(expect.stringContaining("SET status = 'success'"), expect.anything());
+    expect(client.query).toHaveBeenCalledWith(expect.stringContaining('metadata = metadata ||'), [
+      'payment-1', expect.stringContaining('unverified_success_callback'),
+    ]);
+  });
+
+  test('a callback whose request ids do not match the payment is rejected', async () => {
+    const client = fakeClient([['WHERE callback_token = $1', { rows: [pendingPayment({ merchant_request_id: 'other-merchant' })] }]]);
+    withTransactionMock.mockImplementation(fn => fn(client));
+    const result = await PaymentService.handleMpesaCallback(callbackToken, { Body: { stkCallback: {} } });
+    expect(result.accepted).toBe(false);
+    expect(querySTKPushMock).not.toHaveBeenCalled();
+  });
+
+  test('a verified late success upgrades a payment that was marked failed', async () => {
+    querySTKPushMock.mockResolvedValue({ state: 'success', resultCode: '0' });
+    const failed = pendingPayment({ status: 'failed' });
+    const client = fakeClient([
+      ['WHERE callback_token = $1', { rows: [failed] }],
+      ['WHERE id = $1 FOR UPDATE', { rows: [failed] }],
+      ["SET status = 'success'", { rows: [pendingPayment({ status: 'success' })] }],
+      ['FROM subscription_plans WHERE name = $1', { rows: [{ id: 'plan-1', name: 'standard', duration_months: 1 }] }],
+      ['SELECT id FROM roles WHERE name = $1', { rows: [{ id: 2 }] }],
+      ['INSERT INTO subscriptions', { rows: [{ id: 'subscription-1' }] }],
+    ]);
+    withTransactionMock.mockImplementation(fn => fn(client));
+    const result = await PaymentService.handleMpesaCallback(callbackToken, { Body: { stkCallback: {} } });
+    expect(result).toEqual({ accepted: true, duplicate: false });
+    expect(client.query).toHaveBeenCalledWith(expect.stringContaining("SET status = 'success'"), expect.anything());
+  });
+
+  test('an early "failed" status answer keeps the payment pending (Fuliza/PIN may still be on screen)', async () => {
+    querySTKPushMock.mockResolvedValue({ state: 'failed', resultCode: '1', resultDesc: 'The balance is insufficient' });
+    executeQueryMock.mockImplementation(async sql => (sql.includes('status_checks = status_checks + 1')
+      ? { rows: [{ checkout_request_id: 'checkout-1', created_at: new Date().toISOString() }] }
+      : { rows: [] }));
+    await PaymentService.refreshFromMpesa('payment-1');
+    expect(withTransactionMock).not.toHaveBeenCalled();
+    expect(executeQueryMock).toHaveBeenCalledWith(expect.stringContaining('metadata = metadata ||'), ['payment-1', expect.stringContaining('last_query')]);
   });
 
   test('retry helper retries transient failures and stops on permanent ones', async () => {

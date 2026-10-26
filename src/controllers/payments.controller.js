@@ -56,7 +56,7 @@ class PaymentsController {
   /** Always answers Safaricom with 200 so it does not retry a callback we have already stored. */
   static async mpesaCallback(req, res) {
     try {
-      const result = await PaymentService.handleMpesaCallback(req.params.token, req.body);
+      const result = await PaymentService.handleMpesaCallback(req.params.token, req.body, { ip: req.ip });
       return res.status(200).json({
         ResultCode: result.accepted ? 0 : 1,
         ResultDesc: result.accepted ? 'Accepted' : 'Rejected',

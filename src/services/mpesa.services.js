@@ -8,6 +8,11 @@ const baseUrl = () => (process.env.MPESA_ENV === 'production'
 
 /** Daraja returns HTTP 500 with this code while the customer has not answered the prompt yet. */
 const STILL_PROCESSING = '500.001.1001';
+// Status-query answers that mean "not decided yet" (the customer may still be on a
+// Fuliza offer or the PIN screen): never treat these as a failure.
+const PENDING_RESULT_CODES = new Set(['', '4999', STILL_PROCESSING]);
+// Daraja error codes that only mean "ask again later" (rate limit, system busy).
+const RETRY_LATER_ERRORS = new Set([STILL_PROCESSING, '500.003.02', '500.003.03', '429.001.01']);
 
 export class MpesaError extends Error {
   constructor(message, { ambiguous = false, code } = {}) {
@@ -145,10 +150,10 @@ class MpesaService {
         CheckoutRequestID: checkoutRequestId,
       }, { retryTimeouts: true });
       const resultCode = String(response.data.ResultCode ?? '');
-      if (resultCode === '') return { state: 'pending' };
+      if (PENDING_RESULT_CODES.has(resultCode)) return { state: 'pending', resultCode, resultDesc: response.data.ResultDesc };
       return { state: resultCode === '0' ? 'success' : 'failed', resultCode, resultDesc: response.data.ResultDesc };
     } catch (error) {
-      if (error.response?.data?.errorCode === STILL_PROCESSING) return { state: 'pending' };
+      if (RETRY_LATER_ERRORS.has(error.response?.data?.errorCode)) return { state: 'pending', resultCode: error.response.data.errorCode };
       throw error;
     }
   }

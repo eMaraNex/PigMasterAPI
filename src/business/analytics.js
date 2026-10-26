@@ -42,10 +42,17 @@ export const buildDashboard = async (permissions, query) => {
   const results = await Promise.all(entries.map(async ([key, widget]) => {
     const sql = widget.sql.replaceAll('{bucket}', range.granularity);
     const params = sql.includes('$1') ? [range.from, range.to] : [];
-    const { sql: _sql, permission: _permission, ...meta } = widget;
+    // Same-length period immediately before, for "vs previous period" on stats.
+    const previousParams = [new Date(range.from.getTime() - (range.to - range.from)), range.from];
+    const { sql: _sql, permission: _permission, compare: _compare, ...meta } = widget;
     try {
       const { rows } = await DatabaseHelper.executeQuery(sql, params);
-      if (widget.kind === 'stat') return [key, { ...meta, value: Number(rows[0]?.value ?? 0) }];
+      if (widget.kind === 'stat') {
+        const value = Number(rows[0]?.value ?? 0);
+        if (!widget.compare) return [key, { ...meta, value }];
+        const previous = await DatabaseHelper.executeQuery(sql, previousParams);
+        return [key, { ...meta, value, previous: Number(previous.rows[0]?.value ?? 0) }];
+      }
       if (widget.kind === 'breakdown') {
         const row = rows[0] ?? {};
         return [key, { ...meta, value: Number(row.value ?? 0), parts: Object.fromEntries(widget.breakdown.map(part => [part, Number(row[part] ?? 0)])) }];

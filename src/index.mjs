@@ -11,6 +11,7 @@ import cron from "node-cron";
 import logger from "./middleware/logger.js";
 import authRouter from "./routes/auth.routes.js";
 import currencyRoutes from "./routes/currency.routes.js";
+import { apiBaseUrl } from "./config/urls.js";
 import { processSubscriptionReminders } from "./services/subscription-reminders.service.js";
 import paymentRoutes from "./routes/payments.routes.js";
 import subscriptionRoutes from "./routes/subscriptions.routes.js";
@@ -82,7 +83,7 @@ if (!isProduction || process.env.ENABLE_API_DOCS === "true") {
     definition: {
       openapi: "3.0.0",
       info: { title: "PigMaster API", version: "2.0.0", description: "Pig farm management API" },
-      servers: [{ url: process.env.PROD_BASE_URL || `http://localhost:${PORT}` }],
+      servers: [{ url: apiBaseUrl() }],
     },
     apis: ["./src/routes/*.js"],
   });

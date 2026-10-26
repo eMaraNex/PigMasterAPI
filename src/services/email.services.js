@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { apiBaseUrl } from '../config/urls.js';
 dotenv.config();
 import nodemailer from 'nodemailer';
 import fs from 'fs/promises';
@@ -158,7 +159,7 @@ class EmailService {
             const templateData = {
                 ...this.getSystemInfo(),
                 appName,
-                url: process.env.NODE_ENV === 'production' ? process.env.PROD_BACKEND_URL : process.env.DEV_BACKEND_URL,
+                url: apiBaseUrl(),
                 type: type,
                 ...options
             };

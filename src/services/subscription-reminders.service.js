@@ -1,4 +1,5 @@
 import { pool } from '../config/database.js';
+import { clientBaseUrl } from '../config/urls.js';
 import logger from '../middleware/logger.js';
 import EmailService from './email.services.js';
 
@@ -28,14 +29,13 @@ export const reminderStage = (daysLeft, ended) => {
   return null;
 };
 
-const clientUrl = () => (process.env.NODE_ENV === 'production' ? process.env.PROD_CLIENT_BASE_URL : process.env.DEV_CLIENT_BASE_URL);
 
 /** Subject and body for one reminder. */
 export const reminderMessage = ({ name, kind, plan, stage, endsAt, daysLeft }) => {
   const product = kind === 'trial' ? 'your PigMaster free trial' : `your PigMaster ${plan} plan`;
   const Product = product.charAt(0).toUpperCase() + product.slice(1);
   const date = NAIROBI_DATE.format(new Date(endsAt));
-  const link = `${clientUrl()}/pricing`;
+  const link = `${clientBaseUrl()}/pricing`;
   const action = kind === 'trial' ? 'Choose a plan' : 'Renew your plan';
   const yearly = 'Tip: paying yearly saves 16% and covers 12 months with one M-Pesa payment.';
   const copy = {

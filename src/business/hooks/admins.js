@@ -1,4 +1,5 @@
 import Joi from 'joi';
+import { clientBaseUrl } from '../../config/urls.js';
 import { randomBytes } from 'crypto';
 import { DatabaseHelper } from '../../config/database.js';
 import { ForbiddenError, ValidationError } from '../../middleware/errors.js';
@@ -15,7 +16,6 @@ const inviteSchema = Joi.object({
   admin_role_id: Joi.number().integer().positive().required(),
 });
 
-const clientUrl = () => (process.env.NODE_ENV === 'production' ? process.env.PROD_CLIENT_BASE_URL : process.env.DEV_CLIENT_BASE_URL);
 const dashboardUrl = () => process.env.ADMIN_DASHBOARD_URL || 'the PigMaster admin dashboard';
 
 /** One-time set-password link (the farmer app's reset page sets the password for any account). */
@@ -31,7 +31,7 @@ const issueSetupLink = async (client, userId) => {
 };
 
 const sendAdminInvite = async ({ email, name, roleName, invitedBy, token }) => {
-  const link = `${clientUrl()}/reset-password/${token}`;
+  const link = `${clientBaseUrl()}/reset-password/${token}`;
   try {
     const result = await new EmailService({}, logger).sendEmail({
       to: email,

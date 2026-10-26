@@ -6,6 +6,7 @@ import EmailService from './email.services.js';
 import logger from '../middleware/logger.js';
 import { ValidationError, NotFoundError, UnauthorizedError } from '../middleware/errors.js';
 import SubscriptionService from './subscription.service.js';
+import { apiBaseUrl, clientBaseUrl } from '../config/urls.js';
 import { recordConsents } from './consent.service.js';
 import axios from 'axios';
 
@@ -240,7 +241,7 @@ class AuthService {
             });
 
             // Send verification email
-            const verifyUrl = `${process.env.PROD_BASE_URL}/api/v1/auth/verify-email/${verificationToken}`;
+            const verifyUrl = `${apiBaseUrl()}/api/v1/auth/verify-email/${verificationToken}`;
             const emailService = new EmailService({}, logger);
             try {
                 const emailResult = await emailService.sendEmail({
@@ -466,7 +467,7 @@ class AuthService {
             );
 
             // Send verification email
-            const verifyUrl = `${process.env.PROD_BASE_URL}/api/v1/auth/verify-email/${verificationToken}`;
+            const verifyUrl = `${apiBaseUrl()}/api/v1/auth/verify-email/${verificationToken}`;
             const emailService = new EmailService({}, logger);
 
             const emailResult = await emailService.sendEmail({
@@ -513,9 +514,7 @@ class AuthService {
                  VALUES ($1, $2, $3, $4)`,
                 [uuidv4(), userId, token, expiresAt]
             );
-            const clientUrl = process.env.NODE_ENV === 'production' ? process.env.PROD_CLIENT_BASE_URL : process.env.DEV_CLIENT_BASE_URL;
-            logger.info(`client url ${clientUrl}`)
-            const resetUrl = `${clientUrl}/reset-password/${token}`;
+            const resetUrl = `${clientBaseUrl()}/reset-password/${token}`;
             logger.info(`Generated reset URL: ${resetUrl}`);
             const emailService = new EmailService({}, logger);
             const emailResult = await emailService.sendEmail({

@@ -46,6 +46,27 @@ const publicPayment = payment => {
   return rest;
 };
 
+// Plain-language reasons for common M-Pesa result codes, shown to the farmer and in admin.
+const RESULT_REASONS = {
+  1: 'Not enough money in M-Pesa (or Fuliza was declined)',
+  17: 'M-Pesa transaction limit reached',
+  1001: 'Another M-Pesa payment is in progress on this phone; wait a minute and try again',
+  1019: 'The M-Pesa request expired before it was completed',
+  1025: 'M-Pesa could not send the prompt; please try again',
+  1032: 'You cancelled the M-Pesa prompt',
+  1037: 'Your phone did not respond to the M-Pesa prompt (it may be off, locked or out of network)',
+  2001: 'Wrong M-Pesa PIN entered',
+  // Rejected by Safaricom before any prompt: our paybill/till setup (type, shortcode, passkey), not the customer.
+  2029: 'M-Pesa could not process this payment right now; our team has been notified. Please try again later',
+  9999: 'M-Pesa could not send the prompt; please try again',
+};
+export const failureReason = (resultCode, resultDesc) => {
+  const friendly = RESULT_REASONS[Number(resultCode)];
+  const detail = [resultCode !== undefined && resultCode !== null && resultCode !== '' ? `M-Pesa code ${resultCode}` : null, resultDesc].filter(Boolean).join(': ');
+  if (friendly) return detail ? `${friendly} (${detail})` : friendly;
+  return detail || 'M-Pesa did not complete the payment';
+};
+
 const tokensMatch = (expected, supplied) => {
   if (!expected || !supplied || expected.length !== supplied.length) return false;
   return timingSafeEqual(Buffer.from(expected), Buffer.from(supplied));
@@ -216,7 +237,7 @@ class PaymentService {
        SET status = 'failed', failure_reason = $2, completed_at = CURRENT_TIMESTAMP,
            metadata = metadata || $3::jsonb
        WHERE id = $1 RETURNING *`,
-      [payment.id, String(outcome.resultDesc ?? 'Payment was not completed').slice(0, 500),
+      [payment.id, (outcome.review ? String(outcome.resultDesc) : failureReason(outcome.resultCode, outcome.resultDesc)).slice(0, 500),
         JSON.stringify({ result_code: outcome.resultCode ?? null, needs_review: Boolean(outcome.review), final_source: outcome.source ?? null })]
     );
     return { changed: true, payment: updated.rows[0] };
@@ -238,6 +259,10 @@ class PaymentService {
     } catch {
       logger.warn('M-Pesa callback rejected: malformed payload');
       return { accepted: false };
+    }
+    if (processed.resultCode === '2029') {
+      logger.error('M-Pesa result 2029 (no prompt sent): check MPESA_TRANSACTION_TYPE (paybill vs till), MPESA_SHORTCODE, '
+        + 'MPESA_PARTY_B and that MPESA_PASSKEY belongs to that shortcode on the Go-Live app');
     }
 
     const payment = await DatabaseHelper.withTransaction(async client => {

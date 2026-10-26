@@ -12,10 +12,12 @@ export default [
         console: "readonly",
         __dirname: "readonly",
         Buffer: "readonly",
+        setTimeout: "readonly",
+        clearTimeout: "readonly",
       },
     },
     rules: {
-      "no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
+      "no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
     },
   },
   {
@@ -26,6 +28,8 @@ export default [
         beforeEach: "readonly",
         test: "readonly",
         expect: "readonly",
+        afterAll: "readonly",
+        beforeAll: "readonly",
       },
     },
   },

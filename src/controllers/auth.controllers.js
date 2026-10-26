@@ -3,13 +3,25 @@ import logger from '../middleware/logger.js';
 import { SuccessResponse } from '../middleware/responses.js';
 import { ValidationError } from '../middleware/errors.js';
 import { pool } from '../config/database.js';
+import { listUserFarms } from '../business/farm-access.js';
+import { consentContext, currentConsents } from '../services/consent.service.js';
 import fs from 'fs';
 import path from 'path';
 
 class AuthController {
+    static setSessionCookie(res, token) {
+        res.cookie('pig_farm_token', token, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'strict',
+            path: '/',
+            maxAge: 7 * 24 * 60 * 60 * 1000,
+        });
+    }
+
     static async register(req, res, next) {
         try {
-            const user = await AuthService.register(req.body);
+            const user = await AuthService.register(req.body, consentContext(req));
             return SuccessResponse(res, 201, 'Registration successful! Please check your email to verify your account.', user);
         } catch (error) {
             logger.error(`Register error: ${error.message}`);
@@ -32,7 +44,12 @@ class AuthController {
                 requires_email_verification: !result.user.email_verified
             };
 
-            return SuccessResponse(res, 200, message, responseData);
+            AuthController.setSessionCookie(res, result.token);
+            const safeResponse = {
+                user: responseData.user,
+                requires_email_verification: responseData.requires_email_verification,
+            };
+            return SuccessResponse(res, 200, message, safeResponse);
         } catch (error) {
             logger.error(`Login error: ${error.message}`);
             next(error);
@@ -147,8 +164,20 @@ class AuthController {
 
     static async logout(req, res, next) {
         try {
-            const token = req.headers.authorization?.split(' ')[1];
+            const headerToken = req.headers.authorization?.startsWith('Bearer ')
+                ? req.headers.authorization.slice(7)
+                : null;
+            const token = headerToken && !['null', 'undefined', ''].includes(headerToken)
+                ? headerToken
+                : decodeURIComponent(req.headers.cookie?.split(';').map((part) => part.trim())
+                    .find((part) => part.startsWith('pig_farm_token='))?.slice('pig_farm_token='.length) || '');
             const result = await AuthService.logout(token);
+            res.clearCookie('pig_farm_token', {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                sameSite: 'strict',
+                path: '/',
+            });
             return SuccessResponse(res, 200, 'Logged out successfully', result);
         } catch (error) {
             logger.error(`Logout error: ${error.message}`);
@@ -158,16 +187,61 @@ class AuthController {
 
     static async ssoAuth(req, res, next) {
         try {
-            const { email, name, image_url, provider } = req.body;
-            const result = await AuthService.ssoAuth({ email, name, image_url, provider });
+            const result = await AuthService.ssoAuth(req.validatedBody, consentContext(req));
+            AuthController.setSessionCookie(res, result.token);
 
             const message = result.user.farm_id 
             ? 'SSO authentication successful' 
             : 'SSO authentication successful. Please create or join a farm to continue.';
 
-            return SuccessResponse(res, 200, message, result);
+            const safeResponse = { user: result.user };
+            return SuccessResponse(res, 200, message, safeResponse);
         } catch (error) {
             logger.error(`SSO auth error: ${error.message}`);
+            next(error);
+        }
+    }
+
+    static async me(req, res, next) {
+        try {
+            const { id, email, name, role_id, farm_id, role_name, permissions,
+                subscription_start, subscription_end } = req.user;
+            const profile = await pool.query(
+                'SELECT phone, avatar_url, email_verified, preferences, provider, created_at FROM users WHERE id = $1',
+                [id]
+            );
+            const [farms, consents] = await Promise.all([listUserFarms(id), currentConsents(id)]);
+            const access = req.farmAccess;
+            return SuccessResponse(res, 200, 'Session restored', {
+                id, email, name, role_id, farm_id: access?.farmId ?? farm_id, role_name, permissions,
+                subscription_start, subscription_end,
+                ...profile.rows[0],
+                farms,
+                consents,
+                farm_role: access ? { key: access.roleKey, name: access.roleName, is_owner: access.isOwner } : null,
+                // "<object>.<operation>" keys, wildcards allowed ("*", "pigs.*", "*.read").
+                farm_permissions: access?.permissions ?? [],
+                access_control: req.accessControl ?? null,
+            });
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    static async updateProfile(req, res, next) {
+        try {
+            const user = await AuthService.updateProfile(req.user.id, req.validatedBody, consentContext(req));
+            return SuccessResponse(res, 200, 'Profile updated', user);
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    static async changePassword(req, res, next) {
+        try {
+            await AuthService.changePassword(req.user.id, req.validatedBody);
+            return SuccessResponse(res, 200, 'Password changed', null);
+        } catch (error) {
             next(error);
         }
     }

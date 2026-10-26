@@ -7,66 +7,31 @@ import "express-async-errors";
 import dotenv from "dotenv";
 import swaggerJsdoc from "swagger-jsdoc";
 import swaggerUi from "swagger-ui-express";
+import cron from "node-cron";
 import logger from "./middleware/logger.js";
-import rowsRoutes from "./routes/rows.routes.js";
-import pensRoutes from "./routes/pens.routes.js";
-import pigsRoutes from "./routes/pigs.routes.js";
 import authRouter from "./routes/auth.routes.js";
-import earningsRoutes from "./routes/earnings.routes.js";
-import breedRoutes from "./routes/breed.routes.js";
-import farmRoutes from "./routes/farms.routes.js";
-import alertRoutes from "./routes/alerts.routes.js";
-import healthRoutes from "./routes/health.routes.js";
-import feedingRoutes from "./routes/feeding.routes.js";
+import currencyRoutes from "./routes/currency.routes.js";
+import { processSubscriptionReminders } from "./services/subscription-reminders.service.js";
 import paymentRoutes from "./routes/payments.routes.js";
 import subscriptionRoutes from "./routes/subscriptions.routes.js";
+import adminRoutes from "./routes/admin.routes.js";
+import { registerBusinessRoutes } from "./business/routing.js";
+import PaymentService from "./services/payment.service.js";
+import AlertService from "./services/alerts.services.js";
 import { errorHandler } from "./middleware/errorHandler.js";
-import bodyParser from "body-parser";
 
-// Load environment variables
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const isProduction = process.env.NODE_ENV === "production";
 
-// IMPORTANT: Trust proxy when deployed (Vercel, Heroku, AWS Lambda, etc.)
-// This must be set BEFORE any rate limiting middleware
-// Vercel automatically sets VERCEL=1 when deployed
-if (process.env.NODE_ENV === "production" || process.env.VERCEL === "1") {
+// Trust the platform proxy so rate limits and audit logs see the real client IP.
+// Set TRUST_PROXY=true when developing behind a tunnel such as ngrok.
+if (isProduction || process.env.VERCEL === "1" || process.env.TRUST_PROXY === "true") {
   app.set("trust proxy", 1);
 }
 
-// Swagger configuration
-const swaggerOptions = {
-  definition: {
-    openapi: "3.0.0",
-    info: {
-      title: "Pig Farm Management API",
-      version: "1.0.0.1",
-      description: "Professional Pig Farm Management System API",
-    },
-    servers: [
-      {
-        url: process.env.PROD_BASE_URL || `http://localhost:${PORT}`,
-        description: "Development server",
-      },
-    ],
-    components: {
-      securitySchemes: {
-        bearerAuth: {
-          type: "http",
-          scheme: "bearer",
-          bearerFormat: "JWT",
-        },
-      },
-    },
-  },
-  apis: ["./src/routes/*.js"],
-};
-
-const swaggerSpec = swaggerJsdoc(swaggerOptions);
-
-// Security middleware
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -81,115 +46,94 @@ app.use(
 );
 
 const corsOrigins = process.env.CORS_ORIGIN
-  ? process.env.CORS_ORIGIN.split(",").map((origin) => origin.trim())
-  : [
-    "https://pigmaster.emaranex.com",
-    "http://localhost:3000",
-    "https://pigmaster.vercel.app",
-  ];
+  ? process.env.CORS_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean)
+  : isProduction
+    ? ["https://pigmaster.emaranex.com", "https://pigmaster.vercel.app"]
+    : ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"];
 
 app.use(
   cors({
     origin: corsOrigins,
     credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  }),
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key", "X-Farm-Id"],
+    exposedHeaders: ["Content-Disposition", "X-Export-Truncated"],
+  })
 );
 
-app.use(bodyParser.json());
-app.use(express.json());
-app.use(bodyParser.urlencoded({ extended: true }));
-
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 1000,
-  message: {
-    error: "Too many requests from this IP, please try again later.",
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-app.use("/api/", limiter);
-
-// Body parsing middleware
 app.use(compression());
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
-// API Documentation
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+app.use(
+  "/api/",
+  rateLimit({
+    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
+    limit: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 1000,
+    message: { success: false, message: "Too many requests from this IP, please try again later." },
+    standardHeaders: true,
+    legacyHeaders: false,
+  })
+);
 
-// API Routes
-const apiRouter = express.Router();
-
-// Private Routes
-apiRouter.use("/auth", authRouter);
-
-// Public routes
-apiRouter.use("/rows", rowsRoutes);
-apiRouter.use("/pens", pensRoutes);
-apiRouter.use("/pigs", pigsRoutes);
-apiRouter.use("/earnings", earningsRoutes);
-apiRouter.use("/breeds", breedRoutes);
-apiRouter.use("/farms", farmRoutes);
-apiRouter.use("/alerts", alertRoutes);
-apiRouter.use("/health", healthRoutes);
-apiRouter.use("/feeding", feedingRoutes);
-apiRouter.use("/payments", paymentRoutes);
-apiRouter.use("/subscriptions", subscriptionRoutes);
-
-app.use("/api/v1", apiRouter);
-
-// get homepage
-app.get("/", (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: "Welcome to Pig Farm Management API",
-    documentation: "Visit /api-docs for API documentation",
+// API documentation is only served outside production unless explicitly enabled.
+if (!isProduction || process.env.ENABLE_API_DOCS === "true") {
+  const swaggerSpec = swaggerJsdoc({
+    definition: {
+      openapi: "3.0.0",
+      info: { title: "PigMaster API", version: "2.0.0", description: "Pig farm management API" },
+      servers: [{ url: process.env.PROD_BASE_URL || `http://localhost:${PORT}` }],
+    },
+    apis: ["./src/routes/*.js"],
   });
-});
-
-// 404 handler
-app.use("*", (req, res) => {
-  res.status(404).json({
-    success: false,
-    message: "Route not found",
-    path: req.originalUrl,
-  });
-});
-
-// error handling middleware
-app.use((error, req, res, _next) => {
-  logger.error(error.message);
-  res.status(error.statusCode || 500).json({
-    success: false,
-    message: error.message,
-    errors: error.errors || [],
-  });
-});
-
-// Global error handler
-app.use(errorHandler);
-
-// Initialize database and start server
-async function startServer() {
-  try {
-    logger.info("Starting Pig Farm Management Server...");
-    // Start server
-    app.listen(PORT, () => {
-      logger.info(`🚀 Server running on port ${PORT}`);
-      logger.info(`📚 API Documentation: http://localhost:${PORT}/api-docs`);
-      logger.info(`🌍 Environment: ${process.env.NODE_ENV}`);
-    });
-  } catch (error) {
-    logger.error("Failed to start server:", error);
-    process.exit(1);
-  }
+  app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 }
 
-startServer();
+const apiRouter = express.Router();
+apiRouter.use("/auth", authRouter);
+apiRouter.use("/payments", paymentRoutes);
+apiRouter.use("/subscriptions", subscriptionRoutes);
+apiRouter.use("/currency", currencyRoutes);
+apiRouter.use("/admin", adminRoutes);
+// Farm data (farms, rows, pens, pigs, health, feeding, breeding, earnings, alerts...)
+// and admin CRUD objects are generated from business/*-config.js.
+registerBusinessRoutes(apiRouter);
+app.use("/api/v1", apiRouter);
+
+app.get("/", (_req, res) => {
+  res.status(200).json({ success: true, message: "PigMaster API" });
+});
+
+app.use("*", (req, res) => {
+  res.status(404).json({ success: false, message: "Route not found" });
+});
+
+app.use(errorHandler);
+
+// Every schedule runs in UTC (servers are in Germany); user-facing times are converted where shown.
+const UTC = { timezone: "UTC" };
+const startSchedulers = () => {
+  // Resolve M-Pesa payments whose callback never arrived; expire stale ones; recover late successes.
+  cron.schedule("* * * * *", () => {
+    PaymentService.reconcilePendingPayments().catch((error) =>
+      logger.error(`Payment reconciliation failed: ${error.message}`)
+    );
+  }, UTC);
+  // Email farm alerts that fall due today (farm timezone).
+  cron.schedule("5 * * * *", () => {
+    AlertService.processDueAlerts().catch((error) => logger.error(`Alert processing failed: ${error.message}`));
+  }, UTC);
+  // Trial / plan ending reminders once a day at 06:00 UTC (09:00 in Nairobi).
+  cron.schedule("0 6 * * *", () => {
+    processSubscriptionReminders().catch((error) => logger.error(`Subscription reminders failed: ${error.message}`));
+  }, UTC);
+};
+
+if (process.env.NODE_ENV !== "test") {
+  app.listen(PORT, () => {
+    logger.info(`Server running on port ${PORT} (${process.env.NODE_ENV})`);
+    if (process.env.ENABLE_SCHEDULER !== "false") startSchedulers();
+  });
+}
 
 export default app;

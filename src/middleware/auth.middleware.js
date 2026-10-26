@@ -10,14 +10,22 @@ const parseTrialPeriod = () => {
     return Number.isNaN(parsed) ? 30 : Math.max(parsed, 1);
 };
 
+const tokenFromCookie = (cookieHeader) => {
+    const value = cookieHeader?.split(';').map((part) => part.trim())
+        .find((part) => part.startsWith('pig_farm_token='));
+    return value ? decodeURIComponent(value.slice('pig_farm_token='.length)) : null;
+};
+
 const authMiddleware = async (req, res, next) => {
     try {
         const authHeader = req.headers.authorization;
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        const headerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+        const token = headerToken && !['null', 'undefined', ''].includes(headerToken)
+            ? headerToken
+            : tokenFromCookie(req.headers.cookie);
+        if (!token) {
             throw new UnauthorizedError('No token provided');
         }
-
-        const token = authHeader.split(' ')[1];
 
         // Check if token is blacklisted
         const blacklistResult = await pool.query(
@@ -29,6 +37,9 @@ const authMiddleware = async (req, res, next) => {
         }
 
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        if (decoded.realm === 'admin') {
+            throw new UnauthorizedError('Admin sessions cannot access farmer endpoints');
+        }
 
         // Fetch user with role, permissions, subscription and farm data
         const userResult = await pool.query(

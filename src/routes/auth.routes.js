@@ -1,10 +1,10 @@
 import express from 'express';
 import AuthController from '../controllers/auth.controllers.js';
 import { validateRequest } from '../middleware/validateRequest.js';
-import { registerSchema, loginSchema, forgotPasswordSchema, resetPasswordSchema } from '../utils/auth.validator.js';
+import { registerSchema, loginSchema, forgotPasswordSchema, resetPasswordSchema, ssoSchema, resendVerificationSchema, updateProfileSchema, changePasswordSchema } from '../utils/auth.validator.js';
+import { farmContext } from '../business/routing.js';
 import rateLimitMiddleware from '../middleware/rate-limit.middleware.js';
 import authMiddleware from '../middleware/auth.middleware.js';
-import { resendVerificationSchema } from '../utils/validator.js';
 
 const router = express.Router();
 
@@ -317,6 +317,9 @@ router.get('/verify-email/:token', AuthController.verifyEmail);
  */
 router.post('/resend-verification', rateLimitMiddleware(3, 60 * 1000), validateRequest(resendVerificationSchema), AuthController.resendVerificationEmail);
 
-router.post('/sso', AuthController.ssoAuth); 
+router.post('/sso', rateLimitMiddleware(5, 60 * 1000), validateRequest(ssoSchema), AuthController.ssoAuth);
+router.get('/me', authMiddleware, farmContext, AuthController.me);
+router.patch('/me', authMiddleware, validateRequest(updateProfileSchema), AuthController.updateProfile);
+router.post('/change-password', authMiddleware, rateLimitMiddleware(5, 60 * 1000), validateRequest(changePasswordSchema), AuthController.changePassword);
 
 export default router;

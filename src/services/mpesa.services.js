@@ -1,222 +1,180 @@
-// services/mpesa.service.js
-import { Buffer } from 'buffer';
-import dotenv from 'dotenv';
-import logger from '../middleware/logger.js';
 import axios from 'axios';
+import logger from '../middleware/logger.js';
+import { isConnectionError, isRetryableStatus, isTimeout, withRetry } from '../utils/retry.js';
 
-dotenv.config();
+const baseUrl = () => (process.env.MPESA_ENV === 'production'
+  ? 'https://api.safaricom.co.ke'
+  : 'https://sandbox.safaricom.co.ke');
+
+/** Daraja returns HTTP 500 with this code while the customer has not answered the prompt yet. */
+const STILL_PROCESSING = '500.001.1001';
+// Status-query answers that mean "not decided yet" (the customer may still be on a
+// Fuliza offer or the PIN screen): never treat these as a failure.
+const PENDING_RESULT_CODES = new Set(['', '4999', STILL_PROCESSING]);
+// Daraja error codes that only mean "ask again later" (rate limit, system busy).
+const RETRY_LATER_ERRORS = new Set([STILL_PROCESSING, '500.003.02', '500.003.03', '429.001.01']);
+
+export class MpesaError extends Error {
+  constructor(message, { ambiguous = false, code } = {}) {
+    super(message);
+    this.name = 'MpesaError';
+    // True when Safaricom may have accepted the request even though we did not get an answer.
+    this.ambiguous = ambiguous;
+    this.code = code;
+  }
+}
+
+let tokenCache = { value: null, expiresAt: 0 };
+
+const requireConfig = () => {
+  const missing = ['MPESA_CONSUMER_KEY', 'MPESA_CONSUMER_SECRET', 'MPESA_SHORTCODE', 'MPESA_PASSKEY', 'MPESA_CALLBACK_URL']
+    .filter(key => !process.env[key]);
+  if (missing.length) throw new MpesaError(`M-Pesa is not configured: missing ${missing.join(', ')}`);
+};
+
+const timestamp = (now = new Date()) => {
+  // Daraja expects East Africa Time (UTC+3), formatted YYYYMMDDHHmmss.
+  const eat = new Date(now.getTime() + 3 * 3600_000);
+  return eat.toISOString().replace(/[-:T]/g, '').slice(0, 14);
+};
 
 class MpesaService {
+  static resetTokenCache() {
+    tokenCache = { value: null, expiresAt: 0 };
+  }
+
   static async getAccessToken() {
-    try {
-      const url = process.env.MPESA_ENV === 'production' 
-        ? 'https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials' 
-        : 'https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials';
-      
-      const authHeader = Buffer.from(
-        `${process.env.MPESA_CONSUMER_KEY}:${process.env.MPESA_CONSUMER_SECRET}`
-      ).toString('base64');
-      
-      logger.debug(`Auth Header: Basic ${authHeader}`);
-      
-      const response = await axios.get(url, {
-        headers: {
-          Authorization: `Basic ${authHeader}`
+    if (tokenCache.value && Date.now() < tokenCache.expiresAt) return tokenCache.value;
+    const credentials = Buffer.from(`${process.env.MPESA_CONSUMER_KEY}:${process.env.MPESA_CONSUMER_SECRET}`).toString('base64');
+    const response = await withRetry(
+      () => axios.get(`${baseUrl()}/oauth/v1/generate?grant_type=client_credentials`, {
+        headers: { Authorization: `Basic ${credentials}` },
+        timeout: 10_000,
+      }),
+      { retries: 2, shouldRetry: error => isConnectionError(error) || isTimeout(error) || isRetryableStatus(error) }
+    );
+    const ttlSeconds = Number(response.data.expires_in) || 3599;
+    tokenCache = { value: response.data.access_token, expiresAt: Date.now() + (ttlSeconds - 60) * 1000 };
+    return tokenCache.value;
+  }
+
+  static password(time) {
+    return Buffer.from(`${process.env.MPESA_SHORTCODE}${process.env.MPESA_PASSKEY}${time}`).toString('base64');
+  }
+
+  /**
+   * POSTs to Daraja with a cached token. A rejected token is refreshed once.
+   * Only failures where Safaricom cannot have acted are retried unless `retryTimeouts` is set.
+   */
+  static async post(path, body, { retryTimeouts }) {
+    let refreshed = false;
+    return withRetry(async () => {
+      const token = await this.getAccessToken();
+      try {
+        return await axios.post(`${baseUrl()}${path}`, body, {
+          headers: { Authorization: `Bearer ${token}` },
+          timeout: 20_000,
+        });
+      } catch (error) {
+        if (error.response?.status === 401 && !refreshed) {
+          refreshed = true;
+          this.resetTokenCache();
+          error.retryAfterRefresh = true;
         }
-      });
-      
-      logger.debug(`Access Token Response: ${JSON.stringify(response.data)}`);
-      return response.data.access_token;
-    } catch (error) {
-      logger.error(`Error getting M-Pesa access token: ${error.message} - Status: ${error.response?.status} - Data: ${JSON.stringify(error.response?.data)}`);
-      throw error;
-    }
+        throw error;
+      }
+    }, {
+      retries: 3,
+      shouldRetry: error => error.retryAfterRefresh
+        || isConnectionError(error)
+        || isRetryableStatus(error)
+        || (retryTimeouts && isTimeout(error)),
+      onRetry: (error, attempt) => logger.warn(`M-Pesa ${path} retry ${attempt + 1}: ${error.code ?? error.response?.status ?? error.message}`),
+    });
   }
 
-  static generateMpesaPassword() {
-    const timestamp = new Date()
-      .toISOString()
-      .replace(/[-:]/g, '')
-      .replace(/T/, '')
-      .replace(/\..+/, '') // Remove milliseconds and Z
-      .substring(0, 14);
-    
-    const passkey = process.env.MPESA_PASSKEY || 'bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919';
-    const password = Buffer.from(
-      `${process.env.MPESA_SHORTCODE}${passkey}${timestamp}`
-    ).toString('base64');
-    
-    logger.debug(`Generated Password Components: Shortcode=${process.env.MPESA_SHORTCODE}, Timestamp=${timestamp}`);
-    logger.debug(`Generated Password: ${password}`);
-    
-    return { password, timestamp };
-  }
-
-  static async initiateSTKPush(phoneNumber, amount, reference, description) {
+  /**
+   * Sends the STK prompt. Returns Safaricom's request ids.
+   * Throws MpesaError; `ambiguous` means the prompt may still reach the customer.
+   */
+  static async initiateSTKPush({ phoneNumber, amount, callbackToken, reference, description }) {
+    requireConfig();
+    const phone = String(phoneNumber).replace(/\D/g, '');
+    if (!/^254[17]\d{8}$/.test(phone)) throw new MpesaError('Phone number must be in the format 2547XXXXXXXX or 2541XXXXXXXX');
+    const time = timestamp();
+    const callbackBase = process.env.MPESA_CALLBACK_URL.replace(/\/+$/, '');
+    const body = {
+      BusinessShortCode: process.env.MPESA_SHORTCODE,
+      Password: this.password(time),
+      Timestamp: time,
+      TransactionType: process.env.MPESA_TRANSACTION_TYPE || 'CustomerPayBillOnline',
+      Amount: Math.max(1, Math.round(Number(amount))),
+      PartyA: phone,
+      PartyB: process.env.MPESA_PARTY_B || process.env.MPESA_SHORTCODE,
+      PhoneNumber: phone,
+      CallBackURL: `${callbackBase}/${callbackToken}`,
+      AccountReference: String(reference).slice(0, 12),
+      TransactionDesc: String(description).slice(0, 13),
+    };
     try {
-      // Validate phone number format
-      const cleanPhone = phoneNumber.toString().replace(/\D/g, '');
-      if (!cleanPhone.startsWith('254') || cleanPhone.length !== 12) {
-        throw new Error(`Invalid phone number format: ${phoneNumber}. Expected format: 254XXXXXXXXX`);
-      }
-
-      const accessToken = await this.getAccessToken();
-      const { password, timestamp } = this.generateMpesaPassword();
-      
-      const url = process.env.MPESA_ENV === 'production' 
-        ? 'https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest' 
-        : 'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest';
-      
-      // Ensure amount is a positive integer
-      const processedAmount = Math.max(1, Math.round(Number(amount)));
-      
-      const bodyData = {
-        BusinessShortCode: process.env.MPESA_SHORTCODE,
-        Password: password,
-        Timestamp: timestamp,
-        TransactionType: 'CustomerPayBillOnline',
-        Amount: processedAmount,
-        PartyA: cleanPhone,
-        PartyB: process.env.MPESA_SHORTCODE,
-        PhoneNumber: cleanPhone,
-        CallBackURL: process.env.MPESA_CALLBACK_URL || 'https://e067abdeea34.ngrok-free.app',
-        AccountReference: reference || 'account',
-        TransactionDesc: description || 'Payment'
-      };
-      
-      logger.debug(`STK Push Request URL: ${url}`);
-      logger.debug(`STK Push Request Payload: ${JSON.stringify(bodyData, null, 2)}`);
-      logger.debug(`Authorization Token (first 20 chars): ${accessToken.substring(0, 20)}...`);
-      
-      const response = await axios.post(url, bodyData, {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 30000 // 30 second timeout
-      });
-      
-      logger.debug(`STK Push Response: ${JSON.stringify(response.data, null, 2)}`);
-      
+      // Never retry a timed-out push: the customer may already have the prompt on their phone.
+      const response = await this.post('/mpesa/stkpush/v1/processrequest', body, { retryTimeouts: false });
       if (response.data.ResponseCode !== '0') {
-        throw new Error(`M-Pesa STK Push failed: ${response.data.ResponseDescription || response.data.errorMessage || 'Unknown error'}`);
+        throw new MpesaError(response.data.ResponseDescription || 'M-Pesa rejected the payment request', { code: response.data.ResponseCode });
       }
-      
-      logger.info(`M-Pesa STK Push initiated successfully for reference ${reference}`);
-      return response.data.CheckoutRequestID;
+      return {
+        checkoutRequestId: response.data.CheckoutRequestID,
+        merchantRequestId: response.data.MerchantRequestID,
+      };
     } catch (error) {
-      // Enhanced error logging
-      if (error.response) {
-        logger.error(`M-Pesa API Error Response:`);
-        logger.error(`Status: ${error.response.status}`);
-        logger.error(`Headers: ${JSON.stringify(error.response.headers)}`);
-        logger.error(`Data: ${JSON.stringify(error.response.data, null, 2)}`);
-      } else if (error.request) {
-        logger.error(`No response received from M-Pesa API`);
-        logger.error(`Request: ${JSON.stringify(error.request)}`);
-      } else {
-        logger.error(`Error setting up M-Pesa request: ${error.message}`);
-      }
-      throw error;
+      if (error instanceof MpesaError) throw error;
+      const ambiguous = isTimeout(error) || (error.response?.status ?? 0) >= 500;
+      const detail = error.response?.data?.errorMessage ?? error.message;
+      logger.error(`STK push failed (${ambiguous ? 'ambiguous' : 'rejected'}): ${detail}`);
+      throw new MpesaError(ambiguous ? 'M-Pesa did not respond in time' : `M-Pesa rejected the request: ${detail}`, { ambiguous });
     }
   }
 
-  static async querySTKPush(checkoutRequestID) {
+  /**
+   * Asks Safaricom for the outcome of a prompt.
+   * Returns { state: 'pending' } | { state: 'success' | 'failed', resultCode, resultDesc }.
+   */
+  static async querySTKPush(checkoutRequestId) {
+    requireConfig();
+    const time = timestamp();
     try {
-      const accessToken = await this.getAccessToken();
-      const { password, timestamp } = this.generateMpesaPassword();
-      
-      const url = process.env.MPESA_ENV === 'production' 
-        ? 'https://api.safaricom.co.ke/mpesa/stkpushquery/v1/query' 
-        : 'https://sandbox.safaricom.co.ke/mpesa/stkpushquery/v1/query';
-      
-      const bodyData = {
+      const response = await this.post('/mpesa/stkpushquery/v1/query', {
         BusinessShortCode: process.env.MPESA_SHORTCODE,
-        Password: password,
-        Timestamp: timestamp,
-        CheckoutRequestID: checkoutRequestID
-      };
-      
-      logger.debug(`STK Query Request Payload: ${JSON.stringify(bodyData)}`);
-      
-      const response = await axios.post(url, bodyData, {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        }
-      });
-      
-      logger.debug(`STK Query Response: ${JSON.stringify(response.data)}`);
-      
-      if (response.data.ResponseCode !== '0') {
-        throw new Error(`M-Pesa STK Query failed: ${response.data.errorMessage || 'Unknown error'}`);
-      }
-      
-      logger.info(`M-Pesa STK Query successful for CheckoutRequestID ${checkoutRequestID}`);
-      return response.data;
+        Password: this.password(time),
+        Timestamp: time,
+        CheckoutRequestID: checkoutRequestId,
+      }, { retryTimeouts: true });
+      const resultCode = String(response.data.ResultCode ?? '');
+      if (PENDING_RESULT_CODES.has(resultCode)) return { state: 'pending', resultCode, resultDesc: response.data.ResultDesc };
+      return { state: resultCode === '0' ? 'success' : 'failed', resultCode, resultDesc: response.data.ResultDesc };
     } catch (error) {
-      logger.error(`Error querying M-Pesa STK Push: ${error.message} - Status: ${error.response?.status} - Data: ${JSON.stringify(error.response?.data)}`);
+      if (RETRY_LATER_ERRORS.has(error.response?.data?.errorCode)) return { state: 'pending', resultCode: error.response.data.errorCode };
       throw error;
     }
   }
 
+  /** Normalises the STK callback body. */
   static processCallback(callbackData) {
-    try {
-      const { Body } = callbackData;
-      if (!Body || !Body.stkCallback) {
-        throw new Error('Invalid callback data format');
-      }
-
-      const { MerchantRequestID, CheckoutRequestID, ResultCode, ResultDesc } = Body.stkCallback;
-
-      if (ResultCode === 0) {
-        const callbackMetadata = Body.stkCallback.CallbackMetadata?.Item || [];
-        const amount = callbackMetadata.find(item => item.Name === 'Amount')?.Value;
-        const mpesaReceiptNumber = callbackMetadata.find(item => item.Name === 'MpesaReceiptNumber')?.Value;
-        const balance = callbackMetadata.find(item => item.Name === 'Balance')?.Value;
-        const transactionDate = callbackMetadata.find(item => item.Name === 'TransactionDate')?.Value;
-        const phoneNumber = callbackMetadata.find(item => item.Name === 'PhoneNumber')?.Value;
-
-        logger.info(`M-Pesa callback processed successfully for CheckoutRequestID: ${CheckoutRequestID}`);
-        return {
-          success: true,
-          merchantRequestID: MerchantRequestID,
-          checkoutRequestID: CheckoutRequestID,
-          resultCode: ResultCode,
-          resultDesc: ResultDesc,
-          amount,
-          mpesaReceiptNumber,
-          balance,
-          transactionDate,
-          phoneNumber
-        };
-      } else {
-        logger.warn(`M-Pesa callback processed with failure for CheckoutRequestID: ${CheckoutRequestID}: ${ResultDesc}`);
-        return {
-          success: false,
-          merchantRequestID: MerchantRequestID,
-          checkoutRequestID: CheckoutRequestID,
-          resultCode: ResultCode,
-          resultDesc: ResultDesc
-        };
-      }
-    } catch (error) {
-      logger.error(`Error processing M-Pesa callback: ${error.message}`);
-      throw error;
-    }
-  }
-
-  // Future methods for expansion
-  static async paybill(/* Add params like shortcode, accountNumber, amount, etc. */) {
-    throw new Error('Paybill method not implemented yet');
-  }
-
-  static async b2b(/* Add params like initiator, securityCredential, commandID, senderShortCode, receiverShortCode, amount, etc. */) {
-    throw new Error('B2B method not implemented yet');
-  }
-
-  static async transactionStatus(/* params */) {
-    throw new Error('Transaction status query not implemented yet');
+    const callback = callbackData?.Body?.stkCallback;
+    if (!callback?.CheckoutRequestID) throw new MpesaError('Invalid callback payload');
+    const items = callback.CallbackMetadata?.Item ?? [];
+    const item = name => items.find(entry => entry.Name === name)?.Value;
+    return {
+      success: Number(callback.ResultCode) === 0,
+      checkoutRequestId: callback.CheckoutRequestID,
+      merchantRequestId: callback.MerchantRequestID,
+      resultCode: String(callback.ResultCode),
+      resultDesc: callback.ResultDesc,
+      amount: item('Amount'),
+      mpesaReceiptNumber: item('MpesaReceiptNumber'),
+      transactionDate: item('TransactionDate'),
+      phoneNumber: item('PhoneNumber'),
+    };
   }
 }
 

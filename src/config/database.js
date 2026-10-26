@@ -6,12 +6,16 @@ dotenv.config();
 
 const { Pool } = pg;
 
+// Return DATE columns as 'YYYY-MM-DD' strings. The default parser builds a local-midnight
+// Date, which serialises to the previous day for users east of UTC.
+pg.types.setTypeParser(1082, value => value);
+
 const dbConfig = {};
 
 if (process.env.NODE_ENV === 'production') {
     dbConfig.connectionString = process.env.DATABASE_URL;
-    dbConfig.ssl = false;
-    dbConfig.sslmode = 'disable';
+    // Managed Postgres providers require TLS; set DB_SSLMODE=disable only for a private network database.
+    dbConfig.ssl = process.env.DB_SSLMODE === 'disable' ? false : { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false' };
 } else {
     dbConfig.host = process.env.DB_HOST || 'localhost';
     dbConfig.port = parseInt(process.env.DB_PORT) || 5432;
@@ -31,7 +35,7 @@ if (process.env.NODE_ENV !== 'production' && process.env.DATABASE_URL && hasLoca
     console.log('Using local DB settings from DB_* environment variables in development; ignoring DATABASE_URL.');
 }
 
-dbConfig.max = 1; // Reduced for serverless
+dbConfig.max = Number.parseInt(process.env.DB_POOL_MAX, 10) || 10; // Keep small (1-2) on serverless platforms via DB_POOL_MAX
 dbConfig.min = 0; // No minimum connections
 dbConfig.idleTimeoutMillis = 10000; // 10 seconds
 dbConfig.connectionTimeoutMillis = 60000; // 60 seconds
@@ -65,7 +69,8 @@ export class DatabaseHelper {
             const result = await client.query(query, params);
             return result;
         } catch (error) {
-            console.error('Database query error:', { query, params, error: error.message });
+            // Parameters are deliberately not logged: they contain personal and payment data.
+            console.error('Database query error:', { query, error: error.message });
             throw error;
         } finally {
             client.release();
@@ -96,5 +101,21 @@ export class DatabaseHelper {
 
     static async getConnection() {
         return await pool.connect();
+    }
+
+    /** Runs fn(client) inside BEGIN/COMMIT, rolling back on any error. */
+    static async withTransaction(fn) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const result = await fn(client);
+            await client.query('COMMIT');
+            return result;
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
     }
 }

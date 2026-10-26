@@ -45,14 +45,24 @@ class MpesaService {
 
   static async getAccessToken() {
     if (tokenCache.value && Date.now() < tokenCache.expiresAt) return tokenCache.value;
-    const credentials = Buffer.from(`${process.env.MPESA_CONSUMER_KEY}:${process.env.MPESA_CONSUMER_SECRET}`).toString('base64');
-    const response = await withRetry(
-      () => axios.get(`${baseUrl()}/oauth/v1/generate?grant_type=client_credentials`, {
-        headers: { Authorization: `Basic ${credentials}` },
-        timeout: 10_000,
-      }),
-      { retries: 2, shouldRetry: error => isConnectionError(error) || isTimeout(error) || isRetryableStatus(error) }
-    );
+    const credentials = Buffer.from(`${process.env.MPESA_CONSUMER_KEY.trim()}:${process.env.MPESA_CONSUMER_SECRET.trim()}`).toString('base64');
+    let response;
+    try {
+      response = await withRetry(
+        () => axios.get(`${baseUrl()}/oauth/v1/generate?grant_type=client_credentials`, {
+          headers: { Authorization: `Basic ${credentials}` },
+          timeout: 10_000,
+        }),
+        { retries: 2, shouldRetry: error => isConnectionError(error) || isTimeout(error) || isRetryableStatus(error) }
+      );
+    } catch (error) {
+      // 400/401 here means the keys do not belong to this environment (sandbox keys on production or vice versa).
+      const status = error.response?.status;
+      logger.error(`M-Pesa login failed on ${process.env.MPESA_ENV ?? 'sandbox'} (HTTP ${status ?? 'no response'}): ${JSON.stringify(error.response?.data ?? error.message)}`);
+      throw new MpesaError(status
+        ? `M-Pesa login failed (HTTP ${status}). Check MPESA_CONSUMER_KEY/SECRET belong to the ${process.env.MPESA_ENV === 'production' ? 'production (Go-Live)' : 'sandbox'} app.`
+        : 'Could not reach M-Pesa. Please try again.', { ambiguous: false });
+    }
     const ttlSeconds = Number(response.data.expires_in) || 3599;
     tokenCache = { value: response.data.access_token, expiresAt: Date.now() + (ttlSeconds - 60) * 1000 };
     return tokenCache.value;
@@ -102,7 +112,7 @@ class MpesaService {
     const phone = String(phoneNumber).replace(/\D/g, '');
     if (!/^254[17]\d{8}$/.test(phone)) throw new MpesaError('Phone number must be in the format 2547XXXXXXXX or 2541XXXXXXXX');
     const time = timestamp();
-    const callbackBase = process.env.MPESA_CALLBACK_URL.replace(/\/+$/, '');
+    const callbackBase = process.env.MPESA_CALLBACK_URL.trim().replace(/\/+$/, '');
     const body = {
       BusinessShortCode: process.env.MPESA_SHORTCODE,
       Password: this.password(time),
@@ -129,7 +139,9 @@ class MpesaService {
     } catch (error) {
       if (error instanceof MpesaError) throw error;
       const ambiguous = isTimeout(error) || (error.response?.status ?? 0) >= 500;
-      const detail = error.response?.data?.errorMessage ?? error.message;
+      // Show Safaricom's own reason (e.g. "Bad Request - Invalid CallBackURL"), not just the HTTP status.
+      const body = error.response?.data;
+      const detail = body?.errorMessage ?? body?.ResponseDescription ?? (body ? JSON.stringify(body).slice(0, 300) : error.message);
       logger.error(`STK push failed (${ambiguous ? 'ambiguous' : 'rejected'}): ${detail}`);
       throw new MpesaError(ambiguous ? 'M-Pesa did not respond in time' : `M-Pesa rejected the request: ${detail}`, { ambiguous });
     }

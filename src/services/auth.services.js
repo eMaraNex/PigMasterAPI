@@ -6,6 +6,61 @@ import EmailService from './email.services.js';
 import logger from '../middleware/logger.js';
 import { ValidationError, NotFoundError, UnauthorizedError } from '../middleware/errors.js';
 import SubscriptionService from './subscription.service.js';
+import { recordConsents } from './consent.service.js';
+import axios from 'axios';
+
+let firebaseSigningCertificates;
+let firebaseCertificatesExpireAt = 0;
+
+const verifyFirebaseIdToken = async (idToken) => {
+    const projectId = process.env.FIREBASE_PROJECT_ID;
+    if (!projectId) {
+        throw new ValidationError('Google sign-in is not configured');
+    }
+
+    const getSigningKey = async (header, callback) => {
+        try {
+            if (!header.kid) {
+                throw new Error('Firebase ID token has no signing key id');
+            }
+            if (!firebaseSigningCertificates || Date.now() >= firebaseCertificatesExpireAt) {
+                const response = await axios.get(
+                    'https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com',
+                    { timeout: 5000 }
+                );
+                firebaseSigningCertificates = response.data;
+                const maxAge = Number(response.headers['cache-control']?.match(/max-age=(\d+)/)?.[1] ?? 3600);
+                firebaseCertificatesExpireAt = Date.now() + maxAge * 1000;
+            }
+            const certificate = firebaseSigningCertificates[header.kid];
+            if (!certificate) {
+                throw new Error('Firebase signing certificate not found');
+            }
+            callback(null, certificate);
+        } catch (error) {
+            callback(error);
+        }
+    };
+
+    return new Promise((resolve, reject) => {
+        jwt.verify(
+            idToken,
+            getSigningKey,
+            {
+                algorithms: ['RS256'],
+                audience: projectId,
+                issuer: `https://securetoken.google.com/${projectId}`,
+            },
+            (error, claims) => {
+                if (error) return reject(new UnauthorizedError('Invalid identity provider token'));
+                if (!claims?.sub || !claims.email || claims.email_verified !== true) {
+                    return reject(new UnauthorizedError('Verified email is required for Google sign-in'));
+                }
+                resolve(claims);
+            }
+        );
+    });
+};
 
 class AuthService {
     static async register({
@@ -21,7 +76,7 @@ class AuthService {
         email_verified = false,
         is_active = 1,
         is_deleted = 0
-    }) {
+    }, consent = {}) {
         try {
             // Insert default roles if they don't exist (using integer values for boolean columns)
             const newRole = await DatabaseHelper.executeQuery(
@@ -170,6 +225,19 @@ class AuthService {
             );
 
             const newUser = userResult.rows[0];
+
+            // Evidence of what the person agreed to, with policy version, time, IP and device.
+            await recordConsents({
+                userId,
+                source: 'registration',
+                ip: consent.ip,
+                userAgent: consent.userAgent,
+                entries: [
+                    { type: 'privacy_policy', granted: true },
+                    { type: 'terms', granted: true },
+                    { type: 'marketing', granted: Boolean(marketing_consent) },
+                ],
+            });
 
             // Send verification email
             const verifyUrl = `${process.env.PROD_BASE_URL}/api/v1/auth/verify-email/${verificationToken}`;
@@ -503,9 +571,10 @@ class AuthService {
 
             const passwordHash = await bcrypt.hash(password, 12);
 
+            // The link was delivered by email, so using it also proves the address.
             await DatabaseHelper.executeQuery(
                 `UPDATE users
-                 SET password_hash = $1, updated_at = CURRENT_TIMESTAMP
+                 SET password_hash = $1, email_verified = true, updated_at = CURRENT_TIMESTAMP
                  WHERE id = $2 AND is_deleted = 0`,
                 [passwordHash, userId]
             );
@@ -523,6 +592,47 @@ class AuthService {
             logger.error(`Reset password error: ${error.message}`);
             throw error;
         }
+    }
+
+    static async updateProfile(userId, { name, phone, preferences, marketing_consent }, consent = {}) {
+        if (marketing_consent !== undefined) {
+            await recordConsents({
+                userId, source: 'settings', ip: consent.ip, userAgent: consent.userAgent,
+                entries: [{ type: 'marketing', granted: marketing_consent }],
+            });
+            preferences = { ...(preferences ?? {}), marketing_consent };
+        }
+        const result = await DatabaseHelper.executeQuery(
+            `UPDATE users SET
+               name = COALESCE($2, name),
+               phone = CASE WHEN $3::boolean THEN NULLIF($4, '') ELSE phone END,
+               preferences = COALESCE(preferences, '{}'::jsonb) || COALESCE($5::jsonb, '{}'::jsonb),
+               updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1 AND is_deleted = 0
+             RETURNING id, email, name, phone, avatar_url, preferences`,
+            [userId, name ?? null, phone !== undefined, phone ?? null, preferences ? JSON.stringify(preferences) : null]
+        );
+        if (!result.rows.length) throw new NotFoundError('User not found');
+        return result.rows[0];
+    }
+
+    static async changePassword(userId, { current_password, new_password }) {
+        const { rows } = await DatabaseHelper.executeQuery(
+            'SELECT password_hash, provider FROM users WHERE id = $1 AND is_deleted = 0',
+            [userId]
+        );
+        if (!rows.length) throw new NotFoundError('User not found');
+        if (rows[0].provider !== 'local' || !rows[0].password_hash) {
+            throw new ValidationError('This account signs in with Google; it has no password to change');
+        }
+        if (!(await bcrypt.compare(current_password, rows[0].password_hash))) {
+            throw new ValidationError('Current password is incorrect');
+        }
+        await DatabaseHelper.executeQuery(
+            'UPDATE users SET password_hash = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+            [userId, await bcrypt.hash(new_password, 12)]
+        );
+        logger.info(`Password changed for user ${userId}`);
     }
 
     static async logout(token) {
@@ -544,12 +654,15 @@ class AuthService {
         }
     }
 
-    static async ssoAuth({ email, name, image_url, provider }) {
+    static async ssoAuth({ idToken, privacy_policy_accepted, marketing_consent }, consent = {}) {
         try {
-            // Input validation
-            if (!email || !name) {
-                throw new ValidationError('Email, name are required');
+            if (!idToken || typeof idToken !== 'string') {
+                throw new ValidationError('Firebase ID token is required');
             }
+            const claims = await verifyFirebaseIdToken(idToken);
+            const email = claims.email.toLowerCase();
+            const name = claims.name || email.split('@')[0];
+            const image_url = claims.picture || null;
 
             // Check if user exists
             const userResult = await DatabaseHelper.executeQuery(
@@ -596,10 +709,25 @@ class AuthService {
                         email_verified, is_active, is_deleted, preferences, created_at, provider, password_hash
                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP, $12, $13)
                     RETURNING id, email, name, role_id, farm_id, email_verified, is_active, is_deleted, created_at, avatar_url`,
-                    [ userId, email, name, null, image_url || null, finalRoleId, null, true, 1, 0, JSON.stringify({}), provider || 'sso', null ]
+                    [ userId, email, name, null, image_url, finalRoleId, null, true, 1, 0, JSON.stringify({}), 'google', null ]
                 );
 
                 user = insertResult.rows[0];
+
+                // Google sign-in shows the "you agree to the Terms and Privacy Policy" notice.
+                if (privacy_policy_accepted === true) {
+                    await recordConsents({
+                        userId,
+                        source: 'google_sign_in',
+                        ip: consent.ip,
+                        userAgent: consent.userAgent,
+                        entries: [
+                            { type: 'privacy_policy', granted: true },
+                            { type: 'terms', granted: true },
+                            { type: 'marketing', granted: Boolean(marketing_consent) },
+                        ],
+                    });
+                }
 
                 // Fetch permissions
                 const permissionsResult = await DatabaseHelper.executeQuery(

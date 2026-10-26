@@ -16,7 +16,6 @@ export const SuccessResponse = (res, statusCode = 200, message, data) => {
             ...(data !== undefined && { data }) // Include data only if provided
         };
 
-        logger.info(`Success response: ${JSON.stringify(response)}`);
         res.status(statusCode).json(response);
     } catch (error) {
         logger.error(`Error in SuccessResponse: ${error.message}`);

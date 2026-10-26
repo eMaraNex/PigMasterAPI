@@ -40,6 +40,13 @@ export const loginSchema = Joi.object({
     })
 }).strict();
 
+export const ssoSchema = Joi.object({
+    idToken: Joi.string().min(1).max(8192).required(),
+    // Sent when the sign-in screen showed the Terms/Privacy notice; recorded for new accounts.
+    privacy_policy_accepted: Joi.boolean(),
+    marketing_consent: Joi.boolean(),
+}).strict();
+
 export const forgotPasswordSchema = Joi.object({
     email: Joi.string().email().required().messages({
         'string.email': 'Email must be a valid email address',
@@ -57,3 +64,31 @@ export const resetPasswordSchema = Joi.object({
         'any.required': 'Confirm password is required',
     }),
 }).strict();
+
+export const resendVerificationSchema = Joi.object({
+  email: Joi.string().email().required().messages({
+    "string.email": "Please provide a valid email address",
+    "any.required": "Email is required",
+  }),
+});
+
+export const updateProfileSchema = Joi.object({
+    name: Joi.string().trim().min(2).max(100),
+    phone: Joi.string().trim().pattern(/^\+?[0-9 ]{7,20}$/).allow('', null).messages({
+        'string.pattern.base': 'Enter a valid phone number, e.g. +254712345678',
+    }),
+    preferences: Joi.object({
+        notifications: Joi.object().pattern(Joi.string().max(50), Joi.boolean()).max(30),
+        language: Joi.string().max(10),
+        date_format: Joi.string().valid('DD/MM/YYYY', 'MM/DD/YYYY', 'YYYY-MM-DD'),
+    }),
+    marketing_consent: Joi.boolean(),
+}).min(1);
+
+export const changePasswordSchema = Joi.object({
+    current_password: Joi.string().required().messages({ 'any.required': 'Current password is required' }),
+    new_password: Joi.string().min(8).max(128).invalid(Joi.ref('current_password')).required().messages({
+        'string.min': 'New password must be at least 8 characters',
+        'any.invalid': 'New password must be different from the current one',
+    }),
+});

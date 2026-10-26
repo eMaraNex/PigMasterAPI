@@ -8,40 +8,43 @@
  *
  * scope 'period'   -> the number reacts to the selected date range
  * scope 'snapshot' -> the number is the current total
- * minCohort        -> for partners, rows covering fewer than N farms are suppressed
+ * permission       -> the admin permission needed to see the widget (aggregates need dashboard.read;
+ *                     money needs payments.read; lists of named farmers need customers.read)
+ * minCohort        -> without customers.read, rows covering fewer than N farms are suppressed
  */
-const ALL = ['SUPER_ADMIN', 'PARTNER'];
-const SUPER = ['SUPER_ADMIN'];
-const CUSTOMER = "u.is_deleted = 0 AND u.role_id NOT IN (SELECT id FROM roles WHERE name IN ('superadmin', 'partner'))";
+const ALL = 'dashboard.read';
+const MONEY = 'payments.read';
+const PEOPLE = 'customers.read';
+const CUSTOMER = 'u.is_deleted = 0 AND u.admin_role_id IS NULL';
 
 export const dashboardWidgets = {
   total_farmers: {
-    kind: 'stat', label: 'Total Farmers', icon: 'users', tone: 'indigo', scope: 'snapshot', roles: ALL,
+    kind: 'stat', label: 'Total Farmers', icon: 'users', tone: 'indigo', scope: 'snapshot', permission: ALL,
     sql: `SELECT COUNT(*)::int AS value FROM users u WHERE ${CUSTOMER}`,
   },
   new_farmers: {
-    kind: 'stat', label: 'New Farmers', icon: 'user-plus', tone: 'emerald', scope: 'period', roles: ALL,
+    kind: 'stat', label: 'New Farmers', icon: 'user-plus', tone: 'emerald', scope: 'period', permission: ALL,
     sql: `SELECT COUNT(*)::int AS value FROM users u WHERE ${CUSTOMER} AND u.created_at BETWEEN $1 AND $2`,
   },
   active_farmers: {
-    kind: 'stat', label: 'Active Farmers', icon: 'activity', tone: 'sky', scope: 'period', roles: ALL,
+    kind: 'stat', label: 'Active Farmers', icon: 'activity', tone: 'sky', scope: 'period', permission: ALL,
     sql: `SELECT COUNT(*)::int AS value FROM users u WHERE ${CUSTOMER} AND u.last_login BETWEEN $1 AND $2`,
   },
   total_farms: {
-    kind: 'stat', label: 'Total Farms', icon: 'warehouse', tone: 'amber', scope: 'snapshot', roles: ALL,
+    kind: 'stat', label: 'Total Farms', icon: 'warehouse', tone: 'amber', scope: 'snapshot', permission: ALL,
     sql: 'SELECT COUNT(*)::int AS value FROM farms WHERE is_deleted = 0',
   },
   total_pigs: {
-    kind: 'stat', label: 'Pigs Recorded', icon: 'piggy-bank', tone: 'pink', scope: 'snapshot', roles: ALL,
+    kind: 'stat', label: 'Pigs Recorded', icon: 'piggy-bank', tone: 'pink', scope: 'snapshot', permission: ALL,
     sql: 'SELECT COUNT(*)::int AS value FROM pigs WHERE is_deleted = 0',
   },
   revenue: {
-    kind: 'stat', label: 'Revenue (KES)', icon: 'banknote', tone: 'emerald', scope: 'period', roles: SUPER, format: 'currency',
+    kind: 'stat', label: 'Revenue (KES)', icon: 'banknote', tone: 'emerald', scope: 'period', permission: MONEY, format: 'currency',
     sql: `SELECT COALESCE(SUM(amount), 0)::numeric AS value FROM payments
           WHERE status = 'success' AND currency = 'KES' AND is_deleted = 0 AND completed_at BETWEEN $1 AND $2`,
   },
   payments: {
-    kind: 'breakdown', label: 'Payments', icon: 'credit-card', tone: 'violet', scope: 'period', roles: SUPER,
+    kind: 'breakdown', label: 'Payments', icon: 'credit-card', tone: 'violet', scope: 'period', permission: MONEY,
     breakdown: ['success', 'pending', 'failed'],
     sql: `SELECT COUNT(*)::int AS value,
             COUNT(*) FILTER (WHERE status = 'success')::int AS success,
@@ -50,7 +53,7 @@ export const dashboardWidgets = {
           FROM payments WHERE is_deleted = 0 AND created_at BETWEEN $1 AND $2`,
   },
   subscriptions: {
-    kind: 'breakdown', label: 'Subscriptions', icon: 'badge-check', tone: 'sky', scope: 'snapshot', roles: ALL,
+    kind: 'breakdown', label: 'Subscriptions', icon: 'badge-check', tone: 'sky', scope: 'snapshot', permission: ALL,
     breakdown: ['active', 'trial', 'expired'],
     sql: `SELECT COUNT(*)::int AS value,
             COUNT(*) FILTER (WHERE status = 'active')::int AS active,
@@ -61,13 +64,13 @@ export const dashboardWidgets = {
   },
 
   signup_trend: {
-    kind: 'chart', chart: 'area', label: 'Farmer Signups', scope: 'period', roles: ALL, span: 2,
+    kind: 'chart', chart: 'area', label: 'Farmer Signups', scope: 'period', permission: ALL, span: 2,
     xKey: 'period', dataKeys: ['signups'],
     sql: `SELECT to_char(date_trunc('{bucket}', u.created_at), 'YYYY-MM-DD') AS period, COUNT(*)::int AS signups
           FROM users u WHERE ${CUSTOMER} AND u.created_at BETWEEN $1 AND $2 GROUP BY 1 ORDER BY 1`,
   },
   revenue_trend: {
-    kind: 'chart', chart: 'bar', label: 'Revenue (KES)', scope: 'period', roles: SUPER, span: 2,
+    kind: 'chart', chart: 'bar', label: 'Revenue (KES)', scope: 'period', permission: MONEY, span: 2,
     xKey: 'period', dataKeys: ['revenue'],
     sql: `SELECT to_char(date_trunc('{bucket}', completed_at), 'YYYY-MM-DD') AS period,
             COALESCE(SUM(amount), 0)::float AS revenue
@@ -75,32 +78,32 @@ export const dashboardWidgets = {
             AND completed_at BETWEEN $1 AND $2 GROUP BY 1 ORDER BY 1`,
   },
   breeds: {
-    kind: 'chart', chart: 'bar', orientation: 'horizontal', label: 'Top Breeds', scope: 'snapshot', roles: ALL,
+    kind: 'chart', chart: 'bar', orientation: 'horizontal', label: 'Top Breeds', scope: 'snapshot', permission: ALL,
     xKey: 'breed', dataKeys: ['pigs'], minCohort: 5,
     sql: `SELECT breed, COUNT(*)::int AS pigs, COUNT(DISTINCT farm_id)::int AS farms
           FROM pigs WHERE is_deleted = 0 GROUP BY breed ORDER BY pigs DESC LIMIT 10`,
   },
   gender: {
-    kind: 'chart', chart: 'donut', label: 'Herd by Gender', scope: 'snapshot', roles: ALL,
+    kind: 'chart', chart: 'donut', label: 'Herd by Gender', scope: 'snapshot', permission: ALL,
     nameKey: 'gender', valueKey: 'pigs', minCohort: 5,
     sql: `SELECT gender, COUNT(*)::int AS pigs, COUNT(DISTINCT farm_id)::int AS farms
           FROM pigs WHERE is_deleted = 0 GROUP BY gender ORDER BY gender`,
   },
   plans: {
-    kind: 'chart', chart: 'donut', label: 'Customers by Plan', scope: 'snapshot', roles: ALL,
+    kind: 'chart', chart: 'donut', label: 'Customers by Plan', scope: 'snapshot', permission: ALL,
     nameKey: 'plan', valueKey: 'customers',
     sql: `SELECT r.name AS plan, COUNT(*)::int AS customers FROM users u JOIN roles r ON r.id = u.role_id
           WHERE ${CUSTOMER} GROUP BY r.name ORDER BY customers DESC`,
   },
   breeding_trend: {
-    kind: 'chart', chart: 'line', label: 'Breeding Records', scope: 'period', roles: ALL,
+    kind: 'chart', chart: 'line', label: 'Breeding Records', scope: 'period', permission: ALL,
     xKey: 'period', dataKeys: ['records'],
     sql: `SELECT to_char(date_trunc('{bucket}', created_at), 'YYYY-MM-DD') AS period, COUNT(*)::int AS records
           FROM breeding_records WHERE is_deleted = 0 AND created_at BETWEEN $1 AND $2 GROUP BY 1 ORDER BY 1`,
   },
 
   recent_payments: {
-    kind: 'list', label: 'Recent Payments', scope: 'period', roles: SUPER, span: 2, link: '/payments',
+    kind: 'list', label: 'Recent Payments', scope: 'period', permission: MONEY, span: 2, link: '/payments',
     columns: [
       { key: 'customer', label: 'Customer' },
       { key: 'plan', label: 'Plan' },
@@ -114,7 +117,7 @@ export const dashboardWidgets = {
           ORDER BY p.created_at DESC LIMIT 8`,
   },
   recent_farmers: {
-    kind: 'list', label: 'Newest Farmers', scope: 'period', roles: SUPER, span: 2, link: '/customers',
+    kind: 'list', label: 'Newest Farmers', scope: 'period', permission: PEOPLE, span: 2, link: '/customers',
     columns: [
       { key: 'name', label: 'Name' },
       { key: 'email', label: 'Email' },

@@ -62,25 +62,25 @@ const operationsFor = config => {
   return PERMISSION_OPERATIONS.filter(operation => granted.has(operation));
 };
 
-/** Every permission the platform knows about, grouped for the admin permission editor. */
-export const buildPermissionCatalog = configs => {
-  const objects = Object.entries(configs).filter(([, config]) => isPermissioned(config));
-  const grouped = new Set(PERMISSION_GROUPS.flatMap(([, keys]) => keys));
-  const groups = [
-    ...PERMISSION_GROUPS,
-    ['Other', objects.map(([key]) => key).filter(key => !grouped.has(key))],
-  ];
+/**
+ * Every permission the platform knows about, grouped for a permission editor.
+ * Defaults describe farm roles; the admin dashboard passes its own objects and groups.
+ * `extra` adds objects that are not business objects (e.g. the admin overview dashboard).
+ */
+export const buildPermissionCatalog = (configs, { include = isPermissioned, groups = PERMISSION_GROUPS, extra = {} } = {}) => {
+  const all = { ...Object.fromEntries(Object.entries(configs).filter(([, config]) => include(config))), ...extra };
+  const grouped = new Set(groups.flatMap(([, keys]) => keys));
   return {
     operations: PERMISSION_OPERATIONS.map(key => ({ key, label: OPERATION_LABELS[key] })),
-    groups: groups
+    groups: [...groups, ['Other', Object.keys(all).filter(key => !grouped.has(key))]]
       .map(([label, keys]) => ({
         label,
         objects: keys
-          .filter(key => configs[key] && isPermissioned(configs[key]))
+          .filter(key => all[key])
           .map(key => ({
             key,
-            label: configs[key].permissionLabel ?? pluralLabel(configs[key].label),
-            operations: operationsFor(configs[key]),
+            label: all[key].permissionLabel ?? pluralLabel(all[key].label),
+            operations: all[key].permissionOperations ?? operationsFor(all[key]),
           })),
       }))
       .filter(group => group.objects.length),

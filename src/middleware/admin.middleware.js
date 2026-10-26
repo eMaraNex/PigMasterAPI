@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { pool } from '../config/database.js';
 import { ForbiddenError, UnauthorizedError } from './errors.js';
+import { hasPermission } from '../business/permissions.js';
 
 const readCookie = (header, cookieName) => {
   const item = header?.split(';').map(value => value.trim())
@@ -27,34 +28,38 @@ export const requireAdmin = async (req, _res, next) => {
     if (claims.realm !== 'admin' || !claims.userId) {
       throw new UnauthorizedError('Invalid admin session');
     }
+    // One query loads the admin and the permissions of their admin role.
     const result = await pool.query(
-      `SELECT u.id, u.email, u.name, r.name AS role_name
-       FROM users u JOIN roles r ON r.id = u.role_id
-       WHERE u.id = $1 AND u.is_active = 1 AND u.is_deleted = 0
-         AND r.name IN ('superadmin', 'partner')
-         AND r.is_active = 1 AND r.is_deleted = 0`,
+      `SELECT u.id, u.email, u.name, u.admin_role_id, ar.key AS role_key, ar.name AS role_name, ar.is_super, ar.permissions
+       FROM users u JOIN admin_roles ar ON ar.id = u.admin_role_id
+       WHERE u.id = $1 AND u.is_active = 1 AND u.is_deleted = 0 AND ar.is_active = 1 AND ar.is_deleted = 0`,
       [claims.userId]
     );
     if (!result.rows.length) throw new UnauthorizedError('Admin account is inactive');
-    req.admin = result.rows[0];
-    req.adminRole = result.rows[0].role_name === 'superadmin' ? 'SUPER_ADMIN' : 'PARTNER';
+    const { permissions, ...admin } = result.rows[0];
+    req.admin = admin;
+    req.adminRole = admin.role_key;
+    req.adminPermissions = admin.is_super ? ['*'] : permissions ?? [];
     next();
   } catch (error) {
     next(error);
   }
 };
 
-/** Restricts a route to the given admin roles and records denied attempts. */
-export const requireAdminRoles = roles => async (req, _res, next) => {
-  if (!roles || roles.includes(req.adminRole)) return next();
+/** Records a refused admin request in the audit log. */
+const auditDenied = (req, permission) => pool.query(
+  `INSERT INTO admin_audit_logs (actor_user_id, action, ip_address, filters)
+   VALUES ($1, 'authorization.denied', $2, $3::jsonb)`,
+  [req.admin.id, req.ip, JSON.stringify({ path: req.originalUrl, permission })]
+);
+
+/** Allows the request only when the admin's role grants `operation` on `object`. */
+export const requireAdminPermission = (object, operation) => async (req, _res, next) => {
+  if (hasPermission(req.adminPermissions, object, operation)) return next();
   try {
-    await pool.query(
-      `INSERT INTO admin_audit_logs (actor_user_id, action, ip_address, filters)
-       VALUES ($1, 'authorization.denied', $2, $3::jsonb)`,
-      [req.admin.id, req.ip, JSON.stringify({ path: req.originalUrl })]
-    );
+    await auditDenied(req, `${object}.${operation}`);
   } catch (error) {
     return next(error);
   }
-  return next(new ForbiddenError('Your admin role cannot access this resource'));
+  return next(new ForbiddenError(`Your admin role (${req.admin.role_name}) cannot ${operation} ${object.replace(/_/g, ' ')}`));
 };

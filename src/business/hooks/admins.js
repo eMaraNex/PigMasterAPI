@@ -6,16 +6,13 @@ import logger from '../../middleware/logger.js';
 import EmailService from '../../services/email.services.js';
 import { ConflictError } from '../helpers.js';
 
-// Dashboard roles and the database roles behind them.
-export const ADMIN_ROLES = { SUPER_ADMIN: 'superadmin', PARTNER: 'partner' };
-const ROLE_LABELS = { superadmin: 'Super admin', partner: 'Partner (read-only analytics)' };
 const LINK_HOURS = 72;
 
 const inviteSchema = Joi.object({
   name: Joi.string().trim().min(2).max(100).required(),
   email: Joi.string().trim().lowercase().email().max(255).required(),
   phone: Joi.string().trim().pattern(/^\+?[0-9 ]{7,20}$/).allow('', null),
-  role: Joi.string().valid(...Object.keys(ADMIN_ROLES)).required(),
+  admin_role_id: Joi.number().integer().positive().required(),
 });
 
 const clientUrl = () => (process.env.NODE_ENV === 'production' ? process.env.PROD_CLIENT_BASE_URL : process.env.DEV_CLIENT_BASE_URL);
@@ -51,11 +48,17 @@ const sendAdminInvite = async ({ email, name, roleName, invitedBy, token }) => {
   }
 };
 
-/** Super admins still able to sign in, excluding `exceptUserId`. */
+const activeRole = async (client, id) => {
+  const { rows } = await client.query('SELECT id, name, is_super FROM admin_roles WHERE id = $1 AND is_active = 1 AND is_deleted = 0', [id]);
+  if (!rows.length) throw new ValidationError('Choose an active admin role');
+  return rows[0];
+};
+
+/** Active super admins other than `exceptUserId`. */
 const otherActiveSuperAdmins = async (client, exceptUserId) => {
   const { rows } = await client.query(
-    `SELECT COUNT(*)::int AS n FROM users u JOIN roles r ON r.id = u.role_id
-     WHERE r.name = 'superadmin' AND u.is_active = 1 AND u.is_deleted = 0 AND u.id <> $1`,
+    `SELECT COUNT(*)::int AS n FROM users u JOIN admin_roles ar ON ar.id = u.admin_role_id
+     WHERE ar.is_super AND ar.is_active = 1 AND u.is_active = 1 AND u.is_deleted = 0 AND u.id <> $1`,
     [exceptUserId]
   );
   return rows[0].n;
@@ -64,17 +67,11 @@ const otherActiveSuperAdmins = async (client, exceptUserId) => {
 export const adminUserHooks = {
   async beforeUpdate(ctx, user, data) {
     if (user.id === ctx.admin.id) throw new ForbiddenError('You cannot change your own role or access');
-    // Role arrives as SUPER_ADMIN / PARTNER and is stored as the matching roles row.
-    if (data.role !== undefined) {
-      const { rows } = await ctx.client.query('SELECT id FROM roles WHERE name = $1', [ADMIN_ROLES[data.role]]);
-      data.role_id = rows[0].id;
-    }
-    const demoting = data.role !== undefined && data.role !== 'SUPER_ADMIN';
-    const suspending = data.is_active === false;
-    if ((demoting || suspending) && !(await otherActiveSuperAdmins(ctx.client, user.id))) {
+    const newRole = data.admin_role_id !== undefined ? await activeRole(ctx.client, data.admin_role_id) : null;
+    const losesSuper = (newRole && !newRole.is_super) || data.is_active === false;
+    if (losesSuper && !(await otherActiveSuperAdmins(ctx.client, user.id))) {
       throw new ValidationError('At least one active super admin must remain');
     }
-    delete data.role;
   },
 };
 
@@ -82,24 +79,24 @@ export const adminUserHooks = {
 export const inviteAdmin = async (ctx, body) => {
   const { error, value } = inviteSchema.validate(body ?? {}, { abortEarly: false, stripUnknown: true });
   if (error) throw new ValidationError(`Validation error: ${error.details.map(detail => detail.message).join(', ')}`);
-  const roleName = ADMIN_ROLES[value.role];
-
   const created = await DatabaseHelper.withTransaction(async client => {
+    const role = await activeRole(client, value.admin_role_id);
     const existing = await client.query('SELECT 1 FROM users WHERE lower(email) = $1 AND is_deleted = 0', [value.email]);
     if (existing.rows.length) {
       throw new ConflictError(`${value.email} already has a PigMaster account. Use a separate email address for admin access.`);
     }
+    // No farmer role: admin accounts cannot sign in to the farmer app.
     const { rows } = await client.query(
-      `INSERT INTO users (email, name, phone, role_id, provider, email_verified)
-       VALUES ($1, $2, $3, (SELECT id FROM roles WHERE name = $4), 'local', false) RETURNING id`,
-      [value.email, value.name, value.phone || null, roleName]
+      `INSERT INTO users (email, name, phone, admin_role_id, provider, email_verified)
+       VALUES ($1, $2, $3, $4, 'local', false) RETURNING id`,
+      [value.email, value.name, value.phone || null, role.id]
     );
     const token = await issueSetupLink(client, rows[0].id);
-    return { id: rows[0].id, token };
+    return { id: rows[0].id, token, roleName: role.name };
   });
 
   const emailSent = await sendAdminInvite({
-    email: value.email, name: value.name, roleName: ROLE_LABELS[roleName], invitedBy: ctx.admin.name ?? 'A PigMaster admin', token: created.token,
+    email: value.email, name: value.name, roleName: created.roleName, invitedBy: ctx.admin.name ?? 'A PigMaster admin', token: created.token,
   });
   return { id: created.id, email: value.email, email_sent: emailSent, expires_in_hours: LINK_HOURS };
 };
@@ -111,7 +108,7 @@ export const resendAdminInvite = async (ctx, service, id) => {
   if (!admin.is_active) throw new ValidationError('Reactivate this admin before resending the invite');
   const token = await DatabaseHelper.withTransaction(client => issueSetupLink(client, admin.id));
   const emailSent = await sendAdminInvite({
-    email: admin.email, name: admin.name, roleName: ROLE_LABELS[admin.role_name] ?? 'admin', invitedBy: ctx.admin.name ?? 'A PigMaster admin', token,
+    email: admin.email, name: admin.name, roleName: admin.role_name ?? 'admin', invitedBy: ctx.admin.name ?? 'A PigMaster admin', token,
   });
   return { email: admin.email, email_sent: emailSent, expires_in_hours: LINK_HOURS };
 };

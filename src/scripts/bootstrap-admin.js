@@ -28,14 +28,12 @@ if (missing.length) {
     await client.query("SELECT pg_advisory_xact_lock(hashtext('pigmaster:first-superadmin-bootstrap'))");
 
     const existingSuperAdmin = await client.query(
-      `SELECT u.id
-       FROM users u
-       JOIN roles r ON r.id = u.role_id
-       WHERE r.name = 'superadmin'
+      `SELECT u.id FROM users u JOIN admin_roles ar ON ar.id = u.admin_role_id
+       WHERE ar.is_super AND u.is_deleted = 0
        LIMIT 1`
     );
     if (existingSuperAdmin.rows.length) {
-      throw new Error('A Super Admin already exists. Bootstrap is only allowed once.');
+      throw new Error('A Super Admin already exists. Bootstrap is only allowed once; add more admins from the dashboard.');
     }
 
     const existingUser = await client.query(
@@ -46,16 +44,13 @@ if (missing.length) {
       throw new Error('That email already belongs to an account. Use a new dedicated admin email.');
     }
 
-    const roleResult = await client.query(
-      `INSERT INTO roles (name, description, permissions, is_active, is_deleted)
-       VALUES ('superadmin', 'SuperAdmin role - System-wide control', '["all", "manage_roles"]'::jsonb, 1, 0)
-       ON CONFLICT (name) DO UPDATE SET is_active = 1, is_deleted = 0
-       RETURNING id`
-    );
+    // The super admin role is created by the initial schema; it always has full access.
+    const roleResult = await client.query("SELECT id FROM admin_roles WHERE key = 'super_admin' AND is_super");
+    if (!roleResult.rows.length) throw new Error('The super_admin role is missing. Run the database migrations first.');
 
     await client.query(
       `INSERT INTO users (
-         id, email, password_hash, name, phone, role_id, farm_id,
+         id, email, password_hash, name, phone, admin_role_id, farm_id,
          email_verified, is_active, is_deleted, preferences, created_at
        ) VALUES ($1, $2, $3, $4, $5, $6, NULL, true, 1, 0, '{}'::jsonb, CURRENT_TIMESTAMP)`,
       [randomUUID(), email, passwordHash, name, phone, roleResult.rows[0].id]

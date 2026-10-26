@@ -8,11 +8,11 @@ import { adminUserHooks, inviteAdmin, resendAdminInvite } from './hooks/admins.j
 
 /*
  * Platform-admin objects, mounted at /api/v1/admin/<path>. They are not tenant
- * scoped; access is limited by `adminRoles` and every call is written to
+ * scoped; access is limited by the caller's admin role permissions and every call is written to
  * admin_audit_logs by the engine.
  */
-const SUPER_ADMIN = ['SUPER_ADMIN'];
-const NOT_STAFF = "(SELECT id FROM roles WHERE name IN ('superadmin', 'partner'))";
+// Staff accounts carry an admin role; everyone else is a farmer.
+const IS_FARMER = alias => `${alias}.admin_role_id IS NULL`;
 const PERMISSION_KEY = Joi.string().max(100).pattern(/^(\*|(\*|[a-z_]+)\.(\*|read|create|update|delete|export))$/);
 const permissionCatalog = () => buildPermissionCatalog(farmObjectConfigs);
 
@@ -86,9 +86,8 @@ export const adminObjectConfigs = {
     table: 'users',
     alias: 'u',
     label: 'Customer',
-    adminRoles: SUPER_ADMIN,
     softDelete: SOFT_DELETE,
-    baseWhere: alias => `${alias}.role_id NOT IN ${NOT_STAFF}`,
+    baseWhere: IS_FARMER,
     operations: ['list', 'get', 'update', 'export'],
     defaultSort: { field: 'created_at', order: 'DESC' },
     hiddenFields: ['password_hash', 'admin_mfa_secret', 'preferences', 'provider_id'],
@@ -160,7 +159,6 @@ export const adminObjectConfigs = {
     table: 'farms',
     alias: 'f',
     label: 'Farm',
-    adminRoles: SUPER_ADMIN,
     softDelete: SOFT_DELETE,
     operations: ['list', 'get', 'export'],
     defaultSort: { field: 'created_at', order: 'DESC' },
@@ -208,7 +206,6 @@ export const adminObjectConfigs = {
     table: 'farm_roles',
     alias: 'frl',
     label: 'Farm role',
-    adminRoles: SUPER_ADMIN,
     idType: 'integer',
     softDelete: SOFT_DELETE,
     defaultSort: { field: 'sort_order', order: 'ASC' },
@@ -279,7 +276,6 @@ export const adminObjectConfigs = {
     table: 'payments',
     alias: 'pay',
     label: 'Payment',
-    adminRoles: SUPER_ADMIN,
     softDelete: SOFT_DELETE,
     operations: ['list', 'get', 'export'],
     defaultSort: { field: 'created_at', order: 'DESC' },
@@ -313,7 +309,6 @@ export const adminObjectConfigs = {
     table: 'subscription_plans',
     alias: 'sp',
     label: 'Plan',
-    adminRoles: SUPER_ADMIN,
     operations: ['list', 'get', 'create', 'update', 'export'],
     defaultSort: { field: 'price', order: 'ASC' },
     messages: { duplicate: 'A plan with this name already exists' },
@@ -367,9 +362,8 @@ export const adminObjectConfigs = {
     table: 'users',
     alias: 'adm',
     label: 'Admin',
-    adminRoles: SUPER_ADMIN,
     softDelete: SOFT_DELETE,
-    baseWhere: alias => `${alias}.role_id IN ${NOT_STAFF}`,
+    baseWhere: alias => `${alias}.admin_role_id IS NOT NULL`,
     operations: ['list', 'get', 'update', 'export'],
     defaultSort: { field: 'created_at', order: 'ASC' },
     hiddenFields: ['password_hash', 'admin_mfa_secret', 'preferences', 'provider_id'],
@@ -377,7 +371,7 @@ export const adminObjectConfigs = {
       name: { searchable: true },
       email: { searchable: true },
       phone: {},
-      role_id: { type: 'integer', sortable: false, filterable: false },
+      admin_role_id: { type: 'integer' },
       is_active: { type: 'flag' },
       last_login: { type: 'datetime' },
       created_at: { type: 'datetime' },
@@ -385,16 +379,13 @@ export const adminObjectConfigs = {
     },
     joins: [
       {
-        table: 'roles', alias: 'admr', on: 'admr.id = adm.role_id',
-        columns: {
-          role_name: 'admr.name',
-          role: { sql: "CASE admr.name WHEN 'superadmin' THEN 'SUPER_ADMIN' ELSE 'PARTNER' END" },
-        },
+        table: 'admin_roles', alias: 'admr', on: 'admr.id = adm.admin_role_id',
+        columns: { role_name: 'admr.name', is_super: { sql: 'admr.is_super', type: 'boolean' } },
       },
     ],
     schemas: {
       update: Joi.object({
-        role: Joi.string().valid('SUPER_ADMIN', 'PARTNER'),
+        admin_role_id: Joi.number().integer().positive(),
         is_active: Joi.boolean(),
       }).min(1),
     },
@@ -407,12 +398,80 @@ export const adminObjectConfigs = {
       columns: [
         { field: 'name', header: 'Name' },
         { field: 'email', header: 'Email' },
-        { field: 'role', header: 'Role' },
+        { field: 'role_name', header: 'Role' },
         { field: 'is_active', header: 'Active' },
         { field: 'last_login', header: 'Last sign-in' },
         { field: 'created_at', header: 'Added' },
       ],
     },
+  },
+
+  // What each admin role may do in this dashboard; toggled per area and operation.
+  admin_roles: {
+    path: 'admin-roles',
+    table: 'admin_roles',
+    alias: 'ar',
+    label: 'Admin role',
+    idType: 'integer',
+    softDelete: SOFT_DELETE,
+    defaultSort: { field: 'sort_order', order: 'ASC' },
+    messages: { duplicate: 'A role with this key already exists' },
+    columns: {
+      key: { searchable: true },
+      name: { searchable: true },
+      description: { searchable: true },
+      permissions: { type: 'json', sortable: false, filterable: false },
+      is_system: { type: 'boolean', writable: false },
+      is_super: { type: 'boolean', writable: false },
+      sort_order: { type: 'integer' },
+      is_active: { type: 'flag' },
+      created_at: { type: 'datetime' },
+      updated_at: { type: 'datetime' },
+      member_count: {
+        type: 'integer',
+        sortable: false,
+        sql: '(SELECT COUNT(*)::int FROM users u WHERE u.admin_role_id = ar.id AND u.is_deleted = 0)',
+      },
+    },
+    schemas: {
+      create: Joi.object({
+        key: Joi.string().trim().lowercase().pattern(/^[a-z][a-z0-9_]{1,49}$/).required(),
+        name: schema.text(100).min(2).required(),
+        description: schema.text(500).allow('', null),
+        permissions: Joi.array().items(PERMISSION_KEY).max(500).default([]),
+        sort_order: Joi.number().integer().min(0).max(1000).default(100),
+        is_active: Joi.boolean().default(true),
+      }),
+      update: Joi.object({
+        name: schema.text(100).min(2),
+        description: schema.text(500).allow('', null),
+        permissions: Joi.array().items(PERMISSION_KEY).max(500),
+        sort_order: Joi.number().integer().min(0).max(1000),
+        is_active: Joi.boolean(),
+      }).min(1),
+    },
+    hooks: {
+      async beforeCreate(ctx, data) {
+        data.permissions = sanitisePermissions(data.permissions, adminPermissionCatalog());
+      },
+      async beforeUpdate(ctx, role, data) {
+        if (role.is_super && (data.permissions !== undefined || data.is_active === false)) {
+          throw new ValidationError('The super admin role always has full access; only its name and description can change');
+        }
+        if (role.id === ctx.admin.admin_role_id && (data.permissions !== undefined || data.is_active === false)) {
+          throw new ValidationError('You cannot change the permissions of your own role');
+        }
+        if (data.permissions !== undefined) data.permissions = sanitisePermissions(data.permissions, adminPermissionCatalog());
+        data.updated_at = new Date();
+      },
+      async beforeDelete(ctx, role) {
+        if (role.is_system) throw new ValidationError('Built-in roles cannot be deleted; deactivate them instead');
+        const { rows } = await ctx.client.query('SELECT COUNT(*)::int AS n FROM users WHERE admin_role_id = $1 AND is_deleted = 0', [role.id]);
+        if (rows[0].n) throw new ValidationError(`${rows[0].n} admins still have this role`);
+        return 'soft';
+      },
+    },
+    actions: [{ method: 'get', path: '/catalog', handler: () => adminPermissionCatalog() }],
   },
 
   // Append-only record of privacy/terms acceptance and marketing opt-ins/outs.
@@ -421,7 +480,6 @@ export const adminObjectConfigs = {
     table: 'user_consents',
     alias: 'uc',
     label: 'Consent',
-    adminRoles: SUPER_ADMIN,
     operations: ['list', 'get', 'export'],
     audit: false,
     defaultSort: { field: 'created_at', order: 'DESC' },
@@ -460,7 +518,6 @@ export const adminObjectConfigs = {
     table: 'admin_audit_logs',
     alias: 'aal',
     label: 'Audit entry',
-    adminRoles: SUPER_ADMIN,
     operations: ['list', 'get', 'export'],
     audit: false,
     defaultSort: { field: 'created_at', order: 'DESC' },
@@ -480,7 +537,6 @@ export const adminObjectConfigs = {
     table: 'activity_logs',
     alias: 'al',
     label: 'Activity',
-    adminRoles: SUPER_ADMIN,
     softDelete: SOFT_DELETE,
     operations: ['list', 'get', 'export'],
     audit: false,
@@ -499,3 +555,20 @@ export const adminObjectConfigs = {
     ],
   },
 };
+
+// Areas of the admin dashboard as shown in the admin permission editor.
+const ADMIN_GROUPS = [
+  ['Overview', ['dashboard']],
+  ['Customers & farms', ['customers', 'farms', 'farm_roles']],
+  ['Money', ['payments', 'plans']],
+  ['Admin access', ['admins', 'admin_roles']],
+  ['Compliance & logs', ['consents', 'audit_logs', 'activity_logs']],
+];
+
+let adminCatalog;
+/** Admin permission catalog, built once from the configs above. */
+export const adminPermissionCatalog = () => (adminCatalog ??= buildPermissionCatalog(adminObjectConfigs, {
+  include: () => true,
+  groups: ADMIN_GROUPS,
+  extra: { dashboard: { label: 'Overview dashboard', permissionLabel: 'Overview dashboard', permissionOperations: ['read'] } },
+}));

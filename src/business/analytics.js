@@ -3,6 +3,7 @@ import { DatabaseHelper } from '../config/database.js';
 import { ValidationError } from '../middleware/errors.js';
 import logger from '../middleware/logger.js';
 import { dashboardWidgets } from './analytics-config.js';
+import { hasPermission } from './permissions.js';
 
 const BUCKETS = new Set(['day', 'week', 'month']);
 const MAX_RANGE_DAYS = 731;
@@ -25,20 +26,23 @@ export const resolveRange = query => {
   return { from, to, granularity };
 };
 
-const suppressSmallCohorts = (rows, widget, adminRole) => {
+const suppressSmallCohorts = (rows, widget, permissions) => {
   if (!widget.minCohort) return rows;
-  const visible = adminRole === 'SUPER_ADMIN' ? rows : rows.filter(row => row.farms >= widget.minCohort);
+  const visible = hasPermission(permissions, 'customers', 'read') ? rows : rows.filter(row => row.farms >= widget.minCohort);
   return visible.map(({ farms: _farms, ...row }) => row);
 };
 
-/** Runs every widget the role may see, in parallel; a failing widget degrades to empty data. */
-export const buildDashboard = async (adminRole, query) => {
+/** Runs every widget the admin's permissions allow, in parallel; a failing widget degrades to empty data. */
+export const buildDashboard = async (permissions, query) => {
   const range = resolveRange(query);
-  const entries = Object.entries(dashboardWidgets).filter(([, widget]) => widget.roles.includes(adminRole));
+  const entries = Object.entries(dashboardWidgets).filter(([, widget]) => {
+    const [object, operation] = widget.permission.split('.');
+    return hasPermission(permissions, object, operation);
+  });
   const results = await Promise.all(entries.map(async ([key, widget]) => {
     const sql = widget.sql.replaceAll('{bucket}', range.granularity);
     const params = sql.includes('$1') ? [range.from, range.to] : [];
-    const { sql: _sql, roles: _roles, ...meta } = widget;
+    const { sql: _sql, permission: _permission, ...meta } = widget;
     try {
       const { rows } = await DatabaseHelper.executeQuery(sql, params);
       if (widget.kind === 'stat') return [key, { ...meta, value: Number(rows[0]?.value ?? 0) }];
@@ -46,7 +50,7 @@ export const buildDashboard = async (adminRole, query) => {
         const row = rows[0] ?? {};
         return [key, { ...meta, value: Number(row.value ?? 0), parts: Object.fromEntries(widget.breakdown.map(part => [part, Number(row[part] ?? 0)])) }];
       }
-      return [key, { ...meta, data: suppressSmallCohorts(rows, widget, adminRole) }];
+      return [key, { ...meta, data: suppressSmallCohorts(rows, widget, permissions) }];
     } catch (error) {
       logger.error(`Dashboard widget ${key} failed: ${error.message}`);
       return [key, { ...meta, error: true, data: [], value: 0 }];

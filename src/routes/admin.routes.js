@@ -2,7 +2,7 @@ import express from 'express';
 import Joi from 'joi';
 import rateLimit from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
-import { requireAdmin } from '../middleware/admin.middleware.js';
+import { requireAdmin, requireAdminPermission } from '../middleware/admin.middleware.js';
 import { validateRequest } from '../middleware/validateRequest.js';
 import { SuccessResponse } from '../middleware/responses.js';
 import AdminService from '../services/admin.service.js';
@@ -53,7 +53,9 @@ router.get('/auth/me', requireAdmin, async (req, res, next) => {
       id: req.admin.id,
       email: req.admin.email,
       name: req.admin.name,
-      role: req.adminRole,
+      role: { key: req.admin.role_key, name: req.admin.role_name, is_super: req.admin.is_super },
+      // "<object>.<operation>" keys (wildcards allowed); the UI hides what the role cannot do.
+      permissions: req.adminPermissions,
     });
   } catch (error) {
     next(error);
@@ -89,9 +91,9 @@ router.post('/auth/logout', requireAdmin, async (req, res, next) => {
 });
 
 // Config-driven dashboard: widgets are declared in business/analytics-config.js.
-router.get('/dashboard', requireAdmin, async (req, res, next) => {
+router.get('/dashboard', requireAdmin, requireAdminPermission('dashboard', 'read'), async (req, res, next) => {
   try {
-    const data = await buildDashboard(req.adminRole, req.query);
+    const data = await buildDashboard(req.adminPermissions, req.query);
     await DatabaseHelper.executeQuery(
       `INSERT INTO admin_audit_logs (actor_user_id, action, ip_address, filters)
        VALUES ($1, 'dashboard.read', $2, $3::jsonb)`,

@@ -1,6 +1,6 @@
 import express from 'express';
 import authMiddleware from '../middleware/auth.middleware.js';
-import { requireAdmin, requireAdminRoles } from '../middleware/admin.middleware.js';
+import { requireAdmin, requireAdminPermission } from '../middleware/admin.middleware.js';
 import { ForbiddenError } from '../middleware/errors.js';
 import { requireActiveSubscription } from '../middleware/subscription.middleware.js';
 import { BaseBusinessLogic } from './base.js';
@@ -71,12 +71,16 @@ export const generateRoutes = (objectKey, config, realm) => {
   const operations = new Set(config.table ? config.operations ?? ALL_OPERATIONS : []);
 
   if (realm === 'admin') {
-    router.use(requireAdmin, requireAdminRoles(config.adminRoles));
+    router.use(requireAdmin);
   } else {
     router.use(authMiddleware, farmContext);
   }
   const writeGuards = realm === 'farm' && config.enforcePlan !== false ? [enforcePlan] : [];
-  const can = operation => (realm === 'farm' && isPermissioned(config) ? [requirePermission(objectKey, config, operation)] : []);
+  // Farm routes check the farm role; admin routes check the admin role. Both are in-memory checks.
+  const can = operation => {
+    if (realm === 'admin') return [requireAdminPermission(objectKey, operation)];
+    return isPermissioned(config) ? [requirePermission(objectKey, config, operation)] : [];
+  };
 
   for (const action of config.actions ?? []) {
     router[action.method](action.path, ...can(actionPermission(action)), ...(action.write ? writeGuards : []), wrap(async (req, res) => {

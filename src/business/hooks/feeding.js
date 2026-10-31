@@ -47,18 +47,18 @@ export const feedingRecordHooks = {
  */
 export const DEFAULT_FEED_GUIDE = {
   piglet: { label: 'Piglet (under 8 weeks)', feed_type: 'Creep pellets', kg_per_day: 0.3 },
-  weaner: { label: 'Weaner (8-12 weeks)', feed_type: 'Sow & weaner meal', kg_per_day: 1.0 },
+  weaner: { label: 'Weaner (8-12 weeks)', feed_type: 'Starter meal', kg_per_day: 1.0 },
   grower: { label: 'Grower (3-4 months)', feed_type: 'Pig grower meal', kg_per_day: 1.8 },
   finisher: { label: 'Finisher (4-8 months)', feed_type: 'Pig finisher meal', kg_per_day: 2.5 },
   dry_sow: { label: 'Dry sow / gilt', feed_type: 'Sow & weaner meal', kg_per_day: 2.5 },
-  pregnant_sow: { label: 'Pregnant sow', feed_type: 'Sow & weaner meal', kg_per_day: 2.5 },
-  lactating_sow: { label: 'Lactating sow', feed_type: 'Sow & weaner meal', kg_per_day: 5.0 },
+  pregnant_sow: { label: 'Pregnant sow', feed_type: 'Gestator meal', kg_per_day: 2.5 },
+  lactating_sow: { label: 'Lactating sow', feed_type: 'Lactator meal', kg_per_day: 5.0 },
   boar: { label: 'Breeding boar', feed_type: 'Sow & weaner meal', kg_per_day: 2.5 },
 };
 
 export const FEED_TYPES = [
-  'Creep pellets', 'Sow & weaner meal', 'Pig grower meal', 'Pig finisher meal',
-  'Maize germ', 'Wheat bran', 'Kitchen waste', 'Other',
+  'Creep pellets', 'Starter meal', 'Sow & weaner meal', 'Gestator meal', 'Lactator meal',
+  'Pig grower meal', 'Pig finisher meal', 'Maize germ', 'Wheat bran', 'Kitchen waste', 'Other',
 ];
 
 // Classifies each live pig into a feeding stage from age, sex, pregnancy and recent farrowing.

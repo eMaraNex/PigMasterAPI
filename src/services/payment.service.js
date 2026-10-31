@@ -72,22 +72,51 @@ const tokensMatch = (expected, supplied) => {
   return timingSafeEqual(Buffer.from(expected), Buffer.from(supplied));
 };
 
+const usdRate = () => {
+  const rate = Number(process.env.USD_TO_KES_RATE);
+  return Number.isFinite(rate) && rate > 0 ? rate : null;
+};
+
 class PaymentService {
-  /** Prices always come from the plan table and the server-side exchange rate. */
-  static async quotePayment(planName, planPeriod = 'monthly') {
+  /** Live pigs (not sold, deceased or deleted) across every farm the user owns. */
+  static async countBillablePigs(userId) {
+    if (!userId) return 0;
+    const result = await DatabaseHelper.executeQuery(
+      `SELECT COUNT(*)::int AS pigs FROM pigs p JOIN farms f ON f.id = p.farm_id
+       WHERE f.created_by = $1 AND f.is_deleted = 0 AND p.is_deleted = 0
+         AND COALESCE(p.status, 'active') IN ('active', 'sick', 'quarantine')`,
+      [userId]
+    );
+    return Number(result.rows[0]?.pigs) || 0;
+  }
+
+  /**
+   * Prices always come from the plan table and the server-side exchange rate.
+   * Monthly price = plan price (covers included_pigs) + price_per_extra_pig for each
+   * live pig above that, capped at max_price when set. Yearly = 12 months less 16%.
+   */
+  static async quotePayment(planName, planPeriod = 'monthly', userId = null) {
     if (!['monthly', 'yearly'].includes(planPeriod)) {
       throw new ValidationError('Billing period must be monthly or yearly');
     }
     const result = await DatabaseHelper.executeQuery(
-      `SELECT name, price, currency, duration_months
+      `SELECT name, price, currency, duration_months, included_pigs, price_per_extra_pig, max_price
        FROM subscription_plans WHERE name = $1 AND is_active = 1 LIMIT 1`,
       [planName]
     );
     const plan = result.rows[0];
     if (!plan || plan.name === 'free' || Number(plan.price) <= 0) throw new ValidationError('Paid subscription plan not found');
+
+    const pigCount = await this.countBillablePigs(userId);
+    const includedPigs = Number(plan.included_pigs) || 0;
+    const perExtraPig = Number(plan.price_per_extra_pig) || 0;
+    const extraPigs = Math.max(0, pigCount - includedPigs);
+    let monthly = Number(plan.price) + extraPigs * perExtraPig;
+    if (plan.max_price !== null && plan.max_price !== undefined) monthly = Math.min(monthly, Number(plan.max_price));
+
     const durationMonths = Math.max(1, Number(plan.duration_months) || 1) * (planPeriod === 'yearly' ? 12 : 1);
     // 16% discount for yearly billing, calculated on the server from the plan price.
-    let amount = Number(plan.price) * durationMonths * (planPeriod === 'yearly' ? 0.84 : 1);
+    let amount = monthly * durationMonths * (planPeriod === 'yearly' ? 0.84 : 1);
     if (plan.currency !== 'KES') {
       const rate = Number(process.env.USD_TO_KES_RATE);
       if (plan.currency !== 'USD' || !Number.isFinite(rate) || rate <= 0) {
@@ -95,7 +124,25 @@ class PaymentService {
       }
       amount *= rate;
     }
-    return { plan: plan.name, planPeriod, durationMonths, amount: Math.max(1, Math.round(amount)), currency: 'KES' };
+    return {
+      plan: plan.name,
+      planPeriod,
+      durationMonths,
+      amount: Math.max(1, Math.round(amount)),
+      currency: 'KES',
+      // Display only: M-Pesa always charges the KES amount.
+      amountUsd: usdRate() ? Math.round((Math.max(1, Math.round(amount)) / usdRate()) * 100) / 100 : null,
+      pricing: {
+        currency: plan.currency,
+        basePrice: Number(plan.price),
+        includedPigs,
+        pricePerExtraPig: perExtraPig,
+        maxPrice: plan.max_price === null || plan.max_price === undefined ? null : Number(plan.max_price),
+        pigCount,
+        extraPigs,
+        monthlyPrice: Math.round(monthly * 100) / 100,
+      },
+    };
   }
 
   /**
@@ -110,7 +157,7 @@ class PaymentService {
     if (idempotencyKey && !IDEMPOTENCY_KEY.test(idempotencyKey)) {
       throw new ValidationError('Idempotency-Key must be 8-100 letters, digits, "-" or "_"');
     }
-    const quote = await this.quotePayment(value.plan, value.metadata?.plan_period ?? value.plan_period);
+    const quote = await this.quotePayment(value.plan, value.metadata?.plan_period ?? value.plan_period, user.id);
     if (Math.round(value.amount) !== quote.amount) {
       throw new ValidationError('Payment amount does not match the current plan price. Refresh and try again.');
     }
@@ -146,7 +193,7 @@ class PaymentService {
          RETURNING *`,
         [user.id, user.farm_id ?? null, quote.plan, quote.amount, value.phone_number, idempotencyKey,
           randomBytes(24).toString('hex'),
-          JSON.stringify({ plan_period: quote.planPeriod, duration_months: quote.durationMonths })]
+          JSON.stringify({ plan_period: quote.planPeriod, duration_months: quote.durationMonths, pricing: quote.pricing })]
       );
       return { payment: inserted.rows[0], replayed: false };
     });

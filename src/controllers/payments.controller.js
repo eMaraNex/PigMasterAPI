@@ -5,7 +5,7 @@ import logger from '../middleware/logger.js';
 class PaymentsController {
   static async getPaymentQuote(req, res, next) {
     try {
-      const quote = await PaymentService.quotePayment(req.query.plan, req.query.period || 'monthly');
+      const quote = await PaymentService.quotePayment(req.query.plan, req.query.period || 'monthly', req.user?.id);
       return SuccessResponse(res, 200, 'Payment quote', quote);
     } catch (error) {
       next(error);

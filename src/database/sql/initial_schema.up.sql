@@ -133,11 +133,12 @@ VALUES
   ('worker', 'Farm worker', 'Records feeding and health work and views the herd.',
     '["rows.read", "pens.read", "pigs.read", "health_records.read", "health_records.create", "feeding_records.read", "feeding_records.create", "feed_stock.read", "breeding_records.read", "piglets.read", "alerts.read"]'::JSONB,
     true, false, true, 3),
+  -- Veterinarian and accountant are kept but not offered to farm admins for now (assignable = false).
   ('veterinarian', 'Veterinarian', 'Manages health records and checks breeding.',
     '["rows.read", "pens.read", "pigs.read", "health_records.*", "breeding_records.read", "piglets.read", "alerts.read", "reports.read"]'::JSONB,
-    true, false, true, 4),
+    true, false, false, 4),
   ('accountant', 'Accountant', 'Views everything and manages sales, feed purchases and reports.',
-    '["*.read", "earnings.*", "feed_stock.*", "reports.export", "removals.export"]'::JSONB, true, false, true, 5),
+    '["*.read", "earnings.*", "feed_stock.*", "reports.export", "removals.export"]'::JSONB, true, false, false, 5),
   ('viewer', 'Viewer', 'Read-only access to the farm.',
     '["*.read"]'::JSONB, true, false, true, 6)
 ON CONFLICT (key) DO NOTHING;
@@ -259,17 +260,22 @@ CREATE TABLE IF NOT EXISTS subscription_plans (
   duration_months  INTEGER       NOT NULL DEFAULT 1,
   price            NUMERIC(10,2) NOT NULL DEFAULT 0,
   currency         VARCHAR(3)    NOT NULL DEFAULT 'USD',
+  -- Herd-size pricing: price covers the first included_pigs live pigs; each extra pig adds
+  -- price_per_extra_pig per month; max_price (optional) caps the monthly total.
+  included_pigs       INTEGER       NOT NULL DEFAULT 0 CHECK (included_pigs >= 0),
+  price_per_extra_pig NUMERIC(10,4) NOT NULL DEFAULT 0 CHECK (price_per_extra_pig >= 0),
+  max_price           NUMERIC(10,2) CHECK (max_price IS NULL OR max_price >= 0),
   description      TEXT,
   is_active        INTEGER       DEFAULT 1 CHECK (is_active IN (0, 1)),
   created_at       TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
   updated_at       TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO subscription_plans (name, duration_months, price, currency, description, is_active)
+INSERT INTO subscription_plans (name, duration_months, price, currency, included_pigs, price_per_extra_pig, max_price, description, is_active)
 VALUES
-  ('free',     0, 0, 'USD', 'Free plan with basic access', 1),
-  ('standard', 1, 1, 'USD', 'Standard monthly plan',       1),
-  ('advanced', 1, 2, 'USD', 'Advanced monthly plan',       1)
+  ('free',     0, 0,   'USD', 0,   0, NULL, 'Free plan with basic access', 1),
+  ('standard', 1, 390, 'KES', 50,  4, 15000, 'Standard monthly plan',       1),
+  ('advanced', 1, 650, 'KES', 100, 5, 20000, 'Advanced monthly plan',       1)
 ON CONFLICT (name) DO NOTHING;
 
 

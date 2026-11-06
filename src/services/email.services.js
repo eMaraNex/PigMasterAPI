@@ -9,6 +9,37 @@ import { DatabaseHelper } from '../config/database.js';
 /** Email types that give way to sign-in, password and invite emails when the daily quota runs low. */
 const BULK_TYPES = new Set(['general', 'alert_notification', 'subscription_reminder']);
 
+// Ports that speak TLS from the first byte; every other port (587, 2587, 25) starts plain and upgrades (STARTTLS).
+const IMPLICIT_TLS_PORTS = new Set([465, 2465]);
+const env = name => String(process.env[name] ?? '').trim().replace(/^["']|["']$/g, '');
+let smtpWarned = false;
+
+/**
+ * SMTP settings for any provider: Resend (smtp.resend.com, 465 or 587, user "resend") or Gmail (587).
+ * The TLS mode always follows the port, so a leftover SMTP_SECURE cannot cause
+ * "wrong version number" (TLS on a STARTTLS port) or a hang (plain text on a TLS port).
+ */
+export const smtpOptions = () => {
+    const port = Number.parseInt(env('SMTP_PORT'), 10) || 587;
+    const secure = IMPLICIT_TLS_PORTS.has(port);
+    const requested = env('SMTP_SECURE').toLowerCase();
+    if (!smtpWarned && requested && (requested === 'true') !== secure) {
+        smtpWarned = true;
+        console.warn(`SMTP_SECURE=${requested} does not match port ${port}; using ${secure ? 'TLS' : 'STARTTLS'} for that port.`);
+    }
+    return {
+        host: env('SMTP_HOST') || 'smtp.gmail.com',
+        port,
+        secure,
+        // On 587/2587 refuse to send unencrypted if the upgrade fails.
+        requireTLS: !secure,
+        auth: { user: env('SMTP_USER'), pass: env('SMTP_PASS') },
+        connectionTimeout: 15_000,
+        greetingTimeout: 10_000,
+        socketTimeout: 30_000,
+    };
+};
+
 // Resend allows a few requests a second; space sends out so loops (alerts, reminders) never hit it.
 const MIN_GAP_MS = Number.parseInt(process.env.EMAIL_MIN_GAP_MS ?? '600', 10) || 0;
 let nextSlot = 0;
@@ -27,8 +58,8 @@ class EmailService {
         this.config = {
             service: process.env.EMAIL_SERVICE || 'gmail',
             user: process.env.SMTP_USER,
-            defaultSender: process.env.DEFAULT_SENDER_EMAIL,
-            replyTo: process.env.EMAIL_REPLY_TO || undefined,
+            defaultSender: env('DEFAULT_SENDER_EMAIL') || undefined,
+            replyTo: env('EMAIL_REPLY_TO') || undefined,
             // Resend's free plan allows 100 emails a day.
             dailyLimit: dailyLimit || Number.parseInt(process.env.EMAIL_DAILY_LIMIT ?? '100', 10) || 100,
             // Emails kept back for sign-in, password reset, invites and error alerts.
@@ -36,17 +67,7 @@ class EmailService {
             ...config
         };
 
-        // Any SMTP provider: Gmail (587, STARTTLS) or Resend (smtp.resend.com, 465, user "resend").
-        const port = Number(process.env.SMTP_PORT) || 587;
-        this.transporter = nodemailer.createTransport({
-            host: process.env.SMTP_HOST || 'smtp.gmail.com',
-            port,
-            secure: process.env.SMTP_SECURE ? process.env.SMTP_SECURE === 'true' : port === 465,
-            auth: {
-                user: process.env.SMTP_USER,
-                pass: process.env.SMTP_PASS
-            }
-        });
+        this.transporter = nodemailer.createTransport(smtpOptions());
 
         this.emailsSentToday = 0;
         this.logger = logger || console;

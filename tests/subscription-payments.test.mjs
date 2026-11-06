@@ -94,7 +94,7 @@ describe('subscription and payment flow', () => {
       if (query.includes('SELECT id FROM users WHERE email')) {
         return { rows: [] };
       }
-      if (query.includes('SELECT * FROM users WHERE email = $1')) {
+      if (query.includes('WHERE lower(u.email) = $1')) {
         return { rows: [{
           id: 'user-1',
           email: 'verified@example.com',
@@ -103,6 +103,8 @@ describe('subscription and payment flow', () => {
           farm_id: null,
           email_verified: true,
           permissions: [],
+          is_active: 1,
+          is_deleted: 0,
         }] };
       }
       if (query.includes('INSERT INTO users')) {
@@ -179,7 +181,7 @@ describe('subscription and payment flow', () => {
     expect(result.user.email).toBe('verified@example.com');
     expect(firebaseCertificateRequestMock).toHaveBeenCalledTimes(1);
     expect(executeQueryMock).toHaveBeenCalledWith(
-      expect.stringContaining('SELECT * FROM users WHERE email = $1'),
+      expect.stringContaining('WHERE lower(u.email) = $1'),
       ['verified@example.com']
     );
   });

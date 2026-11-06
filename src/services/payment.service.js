@@ -6,6 +6,7 @@ import { NotFoundError, ValidationError } from '../middleware/errors.js';
 import { ConflictError } from '../business/helpers.js';
 import MpesaService, { MpesaError } from './mpesa.services.js';
 import SubscriptionService from './subscription.service.js';
+import { reportCriticalError } from './error-alerts.service.js';
 
 const PENDING_REUSE_WINDOW_SECONDS = 120;
 const PENDING_EXPIRY_MINUTES = 30;
@@ -118,20 +119,21 @@ class PaymentService {
     // 16% discount for yearly billing, calculated on the server from the plan price.
     let amount = monthly * durationMonths * (planPeriod === 'yearly' ? 0.84 : 1);
     if (plan.currency !== 'KES') {
-      const rate = Number(process.env.USD_TO_KES_RATE);
-      if (plan.currency !== 'USD' || !Number.isFinite(rate) || rate <= 0) {
+      const rate = usdRate();
+      if (plan.currency !== 'USD' || !rate) {
         throw new ValidationError('A valid server-side USD_TO_KES_RATE is required to quote M-Pesa in KES');
       }
       amount *= rate;
     }
+    amount = Math.max(1, Math.round(amount));
     return {
       plan: plan.name,
       planPeriod,
       durationMonths,
-      amount: Math.max(1, Math.round(amount)),
+      amount,
       currency: 'KES',
       // Display only: M-Pesa always charges the KES amount.
-      amountUsd: usdRate() ? Math.round((Math.max(1, Math.round(amount)) / usdRate()) * 100) / 100 : null,
+      amountUsd: usdRate() ? Math.round((amount / usdRate()) * 100) / 100 : null,
       pricing: {
         currency: plan.currency,
         basePrice: Number(plan.price),
@@ -251,6 +253,7 @@ class PaymentService {
       const phoneOk = !outcome.phoneNumber || normalize(outcome.phoneNumber) === normalize(payment.phone_number);
       if (!amountOk || !phoneOk) {
         logger.error(`Payment ${payment.id} callback mismatch (amount ok: ${amountOk}, phone ok: ${phoneOk}); flagged for review`);
+        reportCriticalError('M-Pesa payment flagged for review', new Error('Paid amount or phone did not match the request'), { payment: payment.id, amountOk, phoneOk });
         outcome = { state: 'failed', resultDesc: 'Paid amount or phone did not match the request; contact support', review: true };
       }
     }
@@ -310,6 +313,9 @@ class PaymentService {
     if (processed.resultCode === '2029') {
       logger.error('M-Pesa result 2029 (no prompt sent): check MPESA_TRANSACTION_TYPE (paybill vs till), MPESA_SHORTCODE, '
         + 'MPESA_PARTY_B and that MPESA_PASSKEY belongs to that shortcode on the Go-Live app');
+      reportCriticalError('M-Pesa configuration error (result 2029)', new Error('No payment prompt was sent: M-Pesa rejected the receiver settings'), {
+        hint: 'Check MPESA_TRANSACTION_TYPE, MPESA_SHORTCODE, MPESA_PARTY_B and MPESA_PASSKEY',
+      });
     }
 
     const payment = await DatabaseHelper.withTransaction(async client => {

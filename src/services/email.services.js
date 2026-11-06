@@ -6,6 +6,19 @@ import fs from 'fs/promises';
 import os from 'os';
 import { DatabaseHelper } from '../config/database.js';
 
+/** Email types that give way to sign-in, password and invite emails when the daily quota runs low. */
+const BULK_TYPES = new Set(['general', 'alert_notification', 'subscription_reminder']);
+
+// Resend allows a few requests a second; space sends out so loops (alerts, reminders) never hit it.
+const MIN_GAP_MS = Number.parseInt(process.env.EMAIL_MIN_GAP_MS ?? '600', 10) || 0;
+let nextSlot = 0;
+const throttle = () => {
+    const now = Date.now();
+    const wait = Math.max(0, nextSlot - now);
+    nextSlot = Math.max(now, nextSlot) + MIN_GAP_MS;
+    return wait ? new Promise(resolve => setTimeout(resolve, wait)) : Promise.resolve();
+};
+
 /**
  * Email Service using Nodemailer with rate limiting
  */
@@ -15,14 +28,20 @@ class EmailService {
             service: process.env.EMAIL_SERVICE || 'gmail',
             user: process.env.SMTP_USER,
             defaultSender: process.env.DEFAULT_SENDER_EMAIL,
-            dailyLimit: dailyLimit || 500,
+            replyTo: process.env.EMAIL_REPLY_TO || undefined,
+            // Resend's free plan allows 100 emails a day.
+            dailyLimit: dailyLimit || Number.parseInt(process.env.EMAIL_DAILY_LIMIT ?? '100', 10) || 100,
+            // Emails kept back for sign-in, password reset, invites and error alerts.
+            reserve: Number.parseInt(process.env.EMAIL_TRANSACTIONAL_RESERVE ?? '30', 10) || 0,
             ...config
         };
 
+        // Any SMTP provider: Gmail (587, STARTTLS) or Resend (smtp.resend.com, 465, user "resend").
+        const port = Number(process.env.SMTP_PORT) || 587;
         this.transporter = nodemailer.createTransport({
             host: process.env.SMTP_HOST || 'smtp.gmail.com',
-            port: process.env.SMTP_PORT || 587,
-            secure: false,
+            port,
+            secure: process.env.SMTP_SECURE ? process.env.SMTP_SECURE === 'true' : port === 465,
             auth: {
                 user: process.env.SMTP_USER,
                 pass: process.env.SMTP_PASS
@@ -31,7 +50,7 @@ class EmailService {
 
         this.emailsSentToday = 0;
         this.logger = logger || console;
-        this.initialize();
+        this.ready = this.initialize().catch(() => {});
     }
 
     /**
@@ -69,6 +88,18 @@ class EmailService {
         } catch (error) {
             this.logger.error(`Initialization error: ${error.message}`);
             throw error;
+        }
+    }
+
+    /** Emails logged today (all instances); falls back to this instance's count. */
+    async countSentToday() {
+        try {
+            const today = new Date().toISOString().split('T')[0];
+            const result = await DatabaseHelper.executeQuery(
+                'SELECT COALESCE(SUM(count), 0)::int AS count FROM email_logs WHERE date = $1 AND is_deleted = 0', [today]);
+            return Number(result.rows[0]?.count) || 0;
+        } catch {
+            return this.emailsSentToday;
         }
     }
 
@@ -171,7 +202,8 @@ class EmailService {
             from,
             subject,
             text,
-            html
+            html,
+            ...(this.config.replyTo && { replyTo: this.config.replyTo })
         };
 
         if (attachments && Array.isArray(attachments)) {
@@ -202,13 +234,18 @@ class EmailService {
      */
     async sendEmail(options, type = 'general') {
         try {
-            // Check daily limit
-            if (this.emailsSentToday >= this.config.dailyLimit) {
-                this.logger.error(`Daily email limit reached: ${this.emailsSentToday}/${this.config.dailyLimit}`);
+            await this.ready;
+            // Today's count across every instance and process, not just this one.
+            const sentToday = await this.countSentToday();
+            // Bulk emails (alerts, reminders) stop early so the reserve stays for important ones.
+            const limit = BULK_TYPES.has(type) ? this.config.dailyLimit - this.config.reserve : this.config.dailyLimit;
+            if (sentToday >= limit) {
+                this.logger.warn(`Daily email limit reached for ${type}: ${sentToday}/${limit}`);
                 return { success: false, status: 'limit_reached', message: 'Daily email limit reached' };
             }
 
             const message = await this.createMessage(options, type);
+            await throttle();
             await this.transporter.sendMail(message);
             await this.logEmailSend(options.user_id, options.farm_id);
 

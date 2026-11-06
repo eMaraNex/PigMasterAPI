@@ -1,4 +1,5 @@
 import logger from './logger.js';
+import { reportCriticalError } from '../services/error-alerts.service.js';
 
 const PARSER_ERRORS = {
     'entity.parse.failed': [400, 'Malformed JSON body'],
@@ -13,6 +14,9 @@ export const errorHandler = (err, req, res, _next) => {
 
     if (statusCode >= 500) {
         logger.error(`${req.method} ${req.originalUrl} failed: ${err.message}`, { stack: err.stack });
+        reportCriticalError(`${req.method} ${req.originalUrl} failed`, err, {
+            status: statusCode, user: req.user?.id, farm: req.farmId ?? req.user?.farm_id, ip: req.ip,
+        });
     } else {
         logger.warn(`${req.method} ${req.originalUrl} -> ${statusCode}: ${message}`);
     }

@@ -20,6 +20,7 @@ import { registerBusinessRoutes } from "./business/routing.js";
 import PaymentService from "./services/payment.service.js";
 import AlertService from "./services/alerts.services.js";
 import { errorHandler } from "./middleware/errorHandler.js";
+import { reportCriticalError } from "./services/error-alerts.service.js";
 
 dotenv.config();
 
@@ -117,18 +118,29 @@ const startSchedulers = () => {
   // Resolve M-Pesa payments whose callback never arrived; expire stale ones; recover late successes.
   cron.schedule("* * * * *", () => {
     PaymentService.reconcilePendingPayments().catch((error) =>
-      logger.error(`Payment reconciliation failed: ${error.message}`)
+      (logger.error(`Payment reconciliation failed: ${error.message}`), reportCriticalError('Payment reconciliation job failed', error))
     );
   }, UTC);
   // Email farm alerts that fall due today (farm timezone).
   cron.schedule("5 * * * *", () => {
-    AlertService.processDueAlerts().catch((error) => logger.error(`Alert processing failed: ${error.message}`));
+    AlertService.processDueAlerts().catch((error) => (logger.error(`Alert processing failed: ${error.message}`), reportCriticalError('Alert email job failed', error)));
   }, UTC);
   // Trial / plan ending reminders once a day at 06:00 UTC (09:00 in Nairobi).
   cron.schedule("0 6 * * *", () => {
-    processSubscriptionReminders().catch((error) => logger.error(`Subscription reminders failed: ${error.message}`));
+    processSubscriptionReminders().catch((error) => (logger.error(`Subscription reminders failed: ${error.message}`), reportCriticalError('Subscription reminder job failed', error)));
   }, UTC);
 };
+
+// Crashes: alert the team (briefly waiting for the email), then exit as Node would anyway.
+const crash = (title) => async (error) => {
+  logger.fatal(title, error instanceof Error ? error : new Error(String(error)));
+  await Promise.race([reportCriticalError(title, error), new Promise((resolve) => setTimeout(resolve, 5000))]);
+  process.exit(1);
+};
+if (process.env.NODE_ENV !== "test") {
+  process.on("uncaughtException", crash("Uncaught exception: API process crashed"));
+  process.on("unhandledRejection", crash("Unhandled promise rejection: API process crashed"));
+}
 
 if (process.env.NODE_ENV !== "test") {
   app.listen(PORT, () => {

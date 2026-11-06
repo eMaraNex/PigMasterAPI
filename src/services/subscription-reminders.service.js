@@ -13,7 +13,7 @@ import EmailService from './email.services.js';
  * email goes out at most once even with several API instances, restarts or a missed day.
  * At most REMINDER_EMAILS_PER_RUN emails are sent per run to protect the email package.
  */
-const MAX_PER_RUN = Number.parseInt(process.env.REMINDER_EMAILS_PER_RUN ?? '100', 10) || 100;
+const MAX_PER_RUN = Number.parseInt(process.env.REMINDER_EMAILS_PER_RUN ?? '40', 10) || 40;
 const LOCK = "hashtext('subscriptions:reminders')";
 const NAIROBI_DATE = new Intl.DateTimeFormat('en-KE', { timeZone: 'Africa/Nairobi', day: 'numeric', month: 'long', year: 'numeric' });
 

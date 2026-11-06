@@ -8,6 +8,7 @@ import { ValidationError, NotFoundError, UnauthorizedError } from '../middleware
 import SubscriptionService from './subscription.service.js';
 import { apiBaseUrl, clientBaseUrl } from '../config/urls.js';
 import { recordConsents } from './consent.service.js';
+import { reportCriticalError } from './error-alerts.service.js';
 import axios from 'axios';
 
 let firebaseSigningCertificates;
@@ -16,7 +17,10 @@ let firebaseCertificatesExpireAt = 0;
 const verifyFirebaseIdToken = async (idToken) => {
     const projectId = process.env.FIREBASE_PROJECT_ID;
     if (!projectId) {
-        throw new ValidationError('Google sign-in is not configured');
+        // The farmer app can have Firebase set up while the API does not: say exactly what is missing.
+        logger.error('Google sign-in rejected: FIREBASE_PROJECT_ID is not set in the API .env (use the same project ID as the UI)');
+        reportCriticalError('Google sign-in is not configured', new Error('FIREBASE_PROJECT_ID is not set on the API'));
+        throw new ValidationError('Google sign-in is not configured on the server yet. Please sign in with email and password.');
     }
 
     const getSigningKey = async (header, callback) => {
@@ -53,7 +57,11 @@ const verifyFirebaseIdToken = async (idToken) => {
                 issuer: `https://securetoken.google.com/${projectId}`,
             },
             (error, claims) => {
-                if (error) return reject(new UnauthorizedError('Invalid identity provider token'));
+                if (error) {
+                    // Usually a project mismatch: the UI's NEXT_PUBLIC_FIREBASE_PROJECT_ID must equal FIREBASE_PROJECT_ID.
+                    logger.warn(`Google sign-in token rejected: ${error.message}`);
+                    return reject(new UnauthorizedError('Google sign-in could not be verified. Please try again.'));
+                }
                 if (!claims?.sub || !claims.email || claims.email_verified !== true) {
                     return reject(new UnauthorizedError('Verified email is required for Google sign-in'));
                 }
@@ -665,7 +673,8 @@ class AuthService {
 
             // Check if user exists
             const userResult = await DatabaseHelper.executeQuery(
-                `SELECT * FROM users WHERE email = $1`,
+                `SELECT u.*, r.permissions FROM users u LEFT JOIN roles r ON r.id = u.role_id
+                 WHERE lower(u.email) = $1 ORDER BY u.is_deleted ASC LIMIT 1`,
                 [email]
             );
 
@@ -674,6 +683,13 @@ class AuthService {
             
             if (userResult.rows.length > 0) {
                 user = userResult.rows[0];
+                if (user.is_deleted === 1 || user.is_active !== 1) {
+                    throw new UnauthorizedError('This account has been deactivated. Contact support to restore it.');
+                }
+                // Dashboard admins have no farmer role and cannot use the farmer app.
+                if (user.admin_role_id && !user.role_id) {
+                    throw new UnauthorizedError('This is a PigMaster admin account. Sign in to the admin dashboard instead.');
+                }
 
                 // Update avatar if provided and different
                 if (image_url && user.avatar_url !== image_url) {
@@ -712,6 +728,8 @@ class AuthService {
                 );
 
                 user = insertResult.rows[0];
+                // Same start as email sign-up: a free trial.
+                await SubscriptionService.createTrialSubscription(userId);
 
                 // Google sign-in shows the "you agree to the Terms and Privacy Policy" notice.
                 if (privacy_policy_accepted === true) {
@@ -733,7 +751,7 @@ class AuthService {
                     'SELECT permissions FROM roles WHERE id = $1',
                     [finalRoleId]
                 );
-                user.permissions = permissionsResult.rows[0].permissions;
+                user.permissions = permissionsResult.rows[0]?.permissions ?? null;
 
                 user.login_count = 0;
             }

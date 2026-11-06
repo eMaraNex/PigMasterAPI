@@ -14,7 +14,8 @@
     "test:watch": "jest --watch",
     "lint": "eslint .",
     "lint:fix": "eslint src/ --fix",
-    "seed:sample": "node src/database/seed-sample-data.js"
+    "seed:sample": "node src/database/seed-sample-data.js",
+    "email:test": "node src/scripts/send-test-email.js"
   },
   "dependencies": {
     "axios": "^1.12.2",

@@ -1,4 +1,4 @@
-name: Deploy API — Live (main)
+name: Deploy API - Live (main)
 
 on:
   workflow_dispatch:
@@ -10,6 +10,7 @@ concurrency:
 jobs:
   lint:
     name: Lint
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -24,6 +25,7 @@ jobs:
   deploy:
     name: Deploy to VPS
     needs: lint
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 15
@@ -36,9 +38,20 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           command_timeout: 15m
           script: |
+            set -eo pipefail
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            echo "Running as $(whoami) with node $(node -v)"
             cd /var/www/PigMasterAPI
-            git fetch origin main
+            git fetch --prune origin main
             git reset --hard origin/main
+            DEPLOYED_SHA="$(git rev-parse HEAD)"
+            echo "Server is now on $DEPLOYED_SHA"
+            if [ "$DEPLOYED_SHA" != "${{ github.sha }}" ]; then
+              echo "Expected ${{ github.sha }} but server has $DEPLOYED_SHA"
+              exit 1
+            fi
             npm ci
             pm2 restart pigmasterapi --update-env
             pm2 save
+            pm2 list

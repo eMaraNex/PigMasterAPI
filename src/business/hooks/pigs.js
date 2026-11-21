@@ -2,7 +2,9 @@ import Joi from 'joi';
 import { DatabaseHelper } from '../../config/database.js';
 import { ValidationError } from '../../middleware/errors.js';
 
-export const MAX_PIGS_PER_PEN = 6;
+// Pigs one pen can hold. A farrowing pen holds a sow with a litter of 20+, and grower pens
+// often hold 20-40, so the default is 50; set MAX_PIGS_PER_PEN in .env to change it.
+export const MAX_PIGS_PER_PEN = Number.parseInt(process.env.MAX_PIGS_PER_PEN ?? '50', 10) || 50;
 
 /** Locks the pen row so two concurrent requests cannot both take its last place. */
 const assertPenHasSpace = async (client, farmId, penId, excludePigId = null) => {

@@ -89,12 +89,10 @@ export const breedingHooks = {
       [record.farm_id, record.sow_id]
     );
     const litters = previous.map(row => row.number_of_piglets || 0).filter(count => count > 0);
+    // Large litters are good; only repeated small litters (under 5, three in a row) suggest culling.
     if (litters.length >= 3 && litters.every(count => count < 5)) {
       await notifyCulling(client, ctx.user.id, record.farm_id, record.sow_id,
         `Sow ${record.sow_id} recommended for culling due to low litter size (<5) over 3 generations.`);
-    } else if (data.number_of_piglets < 5 || data.number_of_piglets > 10) {
-      await notifyCulling(client, ctx.user.id, record.farm_id, record.sow_id,
-        `Sow ${record.sow_id} recommended for culling due to litter size ${data.number_of_piglets}.`);
     }
 
     const { rows: sow } = await client.query(
